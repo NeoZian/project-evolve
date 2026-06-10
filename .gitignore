@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+node_modules/
+.next/
+out/
+build/
+reports/*.json
+reports/*.html
+reports/*.png
+explanations/*.html
+.DS_Store
