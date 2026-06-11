@@ -437,9 +437,24 @@ async def get_all_faculties(
     faculty_id: Optional[int] = None
 ):
     offset = (page - 1) * limit
+
     query = sa.text("""
+        WITH ranked_faculties AS (
+            SELECT
+                faculty_id,
+                faculty_name,
+                department,
+                ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score,
+                ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
+                ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
+                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade,
+                ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score
+            FROM evaluation_results
+            GROUP BY faculty_id, faculty_name, department
+        )
         SELECT *
-        FROM evaluation_results
+        FROM ranked_faculties
         WHERE (:search IS NULL OR faculty_name ILIKE :search_pattern OR department ILIKE :search_pattern)
           AND (:min_score IS NULL OR final_evaluation_score >= :min_score)
           AND (:max_score IS NULL OR final_evaluation_score <= :max_score)
@@ -447,14 +462,25 @@ async def get_all_faculties(
         ORDER BY final_evaluation_score DESC
         LIMIT :limit OFFSET :offset
     """)
+
     count_query = sa.text("""
+        WITH ranked_faculties AS (
+            SELECT
+                faculty_id,
+                faculty_name,
+                department,
+                ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score
+            FROM evaluation_results
+            GROUP BY faculty_id, faculty_name, department
+        )
         SELECT COUNT(*)
-        FROM evaluation_results
+        FROM ranked_faculties
         WHERE (:search IS NULL OR faculty_name ILIKE :search_pattern OR department ILIKE :search_pattern)
           AND (:min_score IS NULL OR final_evaluation_score >= :min_score)
           AND (:max_score IS NULL OR final_evaluation_score <= :max_score)
           AND (:faculty_id IS NULL OR faculty_id = :faculty_id)
     """)
+
     params = {
         "search": search,
         "search_pattern": f"%{search}%" if search else None,
@@ -464,8 +490,10 @@ async def get_all_faculties(
         "limit": limit,
         "offset": offset,
     }
+
     df = pd.read_sql(query, engine, params=params)
     total = pd.read_sql(count_query, engine, params=params).iloc[0, 0]
+
     return {
         "faculties": make_serializable(df.to_dict(orient="records")),
         "pagination": {
@@ -480,13 +508,30 @@ async def get_all_faculties(
 @app.get("/evaluate/{faculty_id}")
 async def evaluate_faculty(faculty_id: int):
     df = pd.read_sql(
-        sa.text("SELECT * FROM evaluation_results WHERE faculty_id = :faculty_id"),
+        sa.text("""
+            SELECT
+                faculty_id,
+                faculty_name,
+                department,
+                ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score,
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
+                ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
+                ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
+                ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
+                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade
+            FROM evaluation_results
+            WHERE faculty_id = :faculty_id
+            GROUP BY faculty_id, faculty_name, department
+        """),
         engine,
         params={"faculty_id": faculty_id}
     )
+
     if df.empty:
         raise HTTPException(status_code=404, detail="Faculty not found")
+
     row = df.iloc[0]
+
     return {
         "faculty_id": int(row["faculty_id"]),
         "faculty_name": row["faculty_name"],
