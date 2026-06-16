@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE, apiFetch } from '@/lib/api';
+import { API_BASE } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import FacultyTable from '@/components/FacultyTable';
 import ScoreCard from '@/components/ScoreCard';
@@ -11,7 +11,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    apiFetch(`${API_BASE}/api/stats`)
+    fetch(`${API_BASE}/api/stats`)
       .then(res => res.json())
       .then(data => setStats(data))
       .finally(() => setLoading(false));

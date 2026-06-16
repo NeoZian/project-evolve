@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE, apiFetch } from '@/lib/api';
+import { API_BASE } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { ShieldCheck, ChevronLeft, ChevronRight, Hash, Clock, FileText, AlertCircle } from 'lucide-react';
 
@@ -12,7 +12,7 @@ export default function AuditPage() {
   const fetchAudit = async (pageNum: number) => {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API_BASE}/api/audit/all?page=${pageNum}&limit=20`);
+      const res = await fetch(`${API_BASE}/api/audit/all?page=${pageNum}&limit=20`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTransactions(data.transactions || []);

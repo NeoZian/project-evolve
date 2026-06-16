@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE, apiFetch } from '@/lib/api';
+import { API_BASE } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -20,7 +20,7 @@ export default function AnalyticsCharts() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    apiFetch(`${API_BASE}/api/analytics/overview`)
+    fetch(`${API_BASE}/api/analytics/overview`)
       .then(res => res.json())
       .then(setData)
       .finally(() => setLoading(false));

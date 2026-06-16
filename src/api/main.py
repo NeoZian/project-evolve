@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response
 import pandas as pd
 from datetime import datetime, timedelta
 import sqlalchemy as sa
@@ -103,34 +103,6 @@ class FeedbackCreate(BaseModel):
     trust_score: int
     comment: Optional[str] = None
     xai_viewed: bool = False
-
-
-class LoginRequest(BaseModel):
-    password: str
-
-
-APP_PASSWORD = os.getenv("APP_PASSWORD", "ProjectEvolve@2026")
-APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN") or hashlib.sha256(
-    f"project-evolve:{APP_PASSWORD}".encode()
-).hexdigest()
-
-
-@app.middleware("http")
-async def simple_password_gate(request: Request, call_next):
-    public_paths = {"/", "/health", "/api/auth/login"}
-    if request.method == "OPTIONS" or request.url.path in public_paths or request.url.path.startswith("/reports"):
-        return await call_next(request)
-    token = request.headers.get("x-access-token")
-    if token != APP_ACCESS_TOKEN:
-        return JSONResponse(status_code=401, content={"detail": "Login required"})
-    return await call_next(request)
-
-
-@app.post("/api/auth/login")
-async def login(payload: LoginRequest):
-    if payload.password != APP_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid password")
-    return {"access_token": APP_ACCESS_TOKEN}
 
 
 def make_serializable(data):
@@ -453,53 +425,6 @@ async def get_feedback_analysis():
         )
     })
     return result
-
-
-@app.get("/api/feedback")
-async def list_feedback(limit: int = Query(25, ge=1, le=100)):
-    try:
-        inspector = sa.inspect(engine)
-        if not inspector.has_table("faculty_feedback"):
-            return {"feedback": [], "summary": {"total": 0}}
-        df = pd.read_sql(
-            sa.text("""
-                WITH faculty_base AS (
-                    SELECT faculty_id, MAX(faculty_name) AS faculty_name, MAX(department) AS department
-                    FROM evaluation_results
-                    GROUP BY faculty_id
-                )
-                SELECT
-                    ff.id,
-                    ff.faculty_id,
-                    COALESCE(fb.faculty_name, 'Unknown Faculty') AS faculty_name,
-                    COALESCE(fb.department, 'Unknown Department') AS department,
-                    ff.understandability_score,
-                    ff.trust_score,
-                    ff.comment,
-                    ff.xai_viewed,
-                    ff.submitted_at
-                FROM faculty_feedback ff
-                LEFT JOIN faculty_base fb ON fb.faculty_id = ff.faculty_id
-                ORDER BY ff.submitted_at DESC
-                LIMIT :limit
-            """),
-            engine,
-            params={"limit": limit}
-        )
-        summary = pd.read_sql(
-            """
-            SELECT
-                COUNT(*) AS total,
-                AVG(understandability_score) AS avg_understandability,
-                AVG(trust_score) AS avg_trust,
-                SUM(CASE WHEN xai_viewed THEN 1 ELSE 0 END) AS xai_viewed_count
-            FROM faculty_feedback
-            """,
-            engine
-        ).iloc[0].to_dict()
-        return {"feedback": make_serializable(df.to_dict(orient="records")), "summary": make_serializable(summary)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Feedback list unavailable: {e}")
 
 
 @app.get("/faculties")
@@ -848,59 +773,6 @@ async def export_audit_pdf(faculty_id: int):
         headers={"Content-Disposition": f"attachment; filename=audit_{faculty_id}.pdf"}
     )
 
-
-
-@app.get("/api/fairness/departments")
-async def get_fairness_departments():
-    try:
-        df = pd.read_sql(
-            """
-            SELECT DISTINCT department
-            FROM evaluation_results
-            WHERE department IS NOT NULL
-            ORDER BY department
-            """,
-            engine
-        )
-        return {"departments": make_serializable(df["department"].tolist())}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Department list unavailable: {e}")
-
-
-@app.get("/api/fairness/department")
-async def get_department_fairness(department: Optional[str] = None):
-    try:
-        where_clause = "WHERE department = :department" if department else ""
-        params = {"department": department} if department else {}
-        df = pd.read_sql(
-            sa.text(f"""
-                SELECT
-                    gender,
-                    department,
-                    AVG(final_evaluation_score) AS avg_final_score,
-                    AVG(peer_score) AS avg_peer_score,
-                    AVG(student_feedback_rating) AS avg_student_feedback,
-                    COUNT(*) AS count
-                FROM evaluation_results
-                {where_clause}
-                GROUP BY gender, department
-                ORDER BY department, gender
-            """),
-            engine,
-            params=params
-        )
-        if df.empty:
-            return {"department": department or "All Departments", "groups": [], "score_gap": 0, "message": "No records found."}
-        by_gender = df.groupby("gender")["avg_final_score"].mean()
-        score_gap = float(by_gender.max() - by_gender.min()) if len(by_gender) > 1 else 0.0
-        return {
-            "department": department or "All Departments",
-            "groups": make_serializable(df.to_dict(orient="records")),
-            "score_gap": round(score_gap, 4),
-            "method": "Averages final, peer, and student-feedback scores by gender for the selected department; large gaps indicate cases for human review."
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Department fairness unavailable: {e}")
 
 @app.get("/api/fairness/latest")
 async def get_latest_fairness_report():

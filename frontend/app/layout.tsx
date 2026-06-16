@@ -2,7 +2,6 @@ import './globals.css';
 import { Inter } from 'next/font/google';
 import Navbar from '@/components/Navbar';
 import ThemeProvider from '@/components/ThemeProvider';
-import AuthGuard from '@/components/AuthGuard';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
@@ -37,7 +36,6 @@ export default function RootLayout({
         className={`${inter.className} bg-white text-gray-900 transition-colors duration-300 dark:bg-[#030712] dark:text-gray-100`}
       >
         <ThemeProvider>
-          <AuthGuard>
           <Navbar />
 
           <main className="min-h-screen bg-gradient-to-br from-gray-50/50 via-white to-gray-50/30 transition-colors duration-300 dark:from-[#030712] dark:via-[#0a0a0f] dark:to-[#030712]">
@@ -68,7 +66,6 @@ export default function RootLayout({
               </div>
             </div>
           </footer>
-          </AuthGuard>
         </ThemeProvider>
       </body>
     </html>
