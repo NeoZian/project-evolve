@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, use } from 'react';
-import { API_BASE, evaluateFaculty, getExplanation, getAudit } from '@/lib/api';
+import { API_BASE, apiFetch, evaluateFaculty, getExplanation, getAudit } from '@/lib/api';
 import XAIExplanation from '@/components/XAIExplanation';
 import BlockchainAudit from '@/components/BlockchainAudit';
 import { ArrowLeft, ExternalLink, Loader2, Sparkles, Download, User, Award, AlertCircle, CheckCircle2, Rocket, FileText, Shield, Brain, Users } from 'lucide-react';
@@ -52,7 +52,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
     setLoadingLime(true);
     
     try {
-      const res = await fetch(`${API_BASE}/explanation/lime/${id}`);
+      const res = await apiFetch(`${API_BASE}/explanation/lime/${id}`);
       
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -82,7 +82,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
     setLimeUrl(null);
     
     try {
-      const res = await fetch(`${API_BASE}/explanation/lime/${id}`);
+      const res = await apiFetch(`${API_BASE}/explanation/lime/${id}`);
       
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -228,6 +228,37 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
                         />
                       </div>
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* How Values Are Generated */}
+            <div className="border-t-2 border-gray-100 pt-12 dark:border-white/5">
+              <div className="mb-6 flex items-center gap-4">
+                <div className="rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 p-3 shadow-lg shadow-cyan-500/25">
+                  <FileText className="h-6 w-6 text-white" strokeWidth={2.5} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">How These Values Are Generated</h2>
+                  <p className="mt-0.5 text-sm font-medium text-gray-500 dark:text-gray-400">Short methodology notes for presentation and transparency.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {[
+                  { title: 'Final Evaluation Score', text: 'Weighted multi-source score combining student feedback, peer review, NLP sentiment, performance, and course quality. It is aggregated by faculty ID so duplicate raw records become one final average.' },
+                  { title: 'Student Feedback', text: 'Taken mainly from student rating / survey-style dataset values such as RateMyProfessor star ratings. Text comments are handled separately by NLP.' },
+                  { title: 'NLP Sentiment', text: 'Calculated from student comments. Positive comments increase the sentiment score; negative comments reduce it.' },
+                  { title: 'Peer Review', text: 'Prototype institutional-style peer score. Since real peer review forms are private, this value is simulated/synthetic for academic testing.' },
+                  { title: 'Performance', text: 'Based on learning-outcome indicators such as average grades and structured teaching-quality data, with missing institutional parts filled synthetically.' },
+                  { title: 'Course Quality', text: 'Represents course design, resources, assignments, and material quality. In this prototype it is estimated from structured indicators plus synthetic course-material scores.' },
+                  { title: 'AI Summary / XAI', text: 'Generated from SHAP/LIME-style feature contributions, showing which factors pushed the score up or down.' },
+                  { title: 'Recommendations', text: 'Generated from weak factors: low sentiment suggests clearer communication; low course quality suggests improving materials; low peer score suggests peer observation.' },
+                ].map((item) => (
+                  <div key={item.title} className="rounded-2xl border border-cyan-100 bg-cyan-50/40 p-5 dark:border-cyan-800/20 dark:bg-cyan-950/10">
+                    <h3 className="mb-2 font-black text-gray-900 dark:text-white">{item.title}</h3>
+                    <p className="text-sm font-medium leading-relaxed text-gray-600 dark:text-gray-400">{item.text}</p>
                   </div>
                 ))}
               </div>
@@ -458,7 +489,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
               <button
                 onClick={async () => {
                   try {
-                    const res = await fetch(`${API_BASE}/export_pdf/${id}`);
+                    const res = await apiFetch(`${API_BASE}/export_pdf/${id}`);
                     if (!res.ok) {
                       const errorText = await res.text();
                       throw new Error(`Server error: ${res.status} - ${errorText}`);

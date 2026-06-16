@@ -1,5 +1,38 @@
 // frontend/lib/api.ts
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const TOKEN_KEY = 'project_evolve_access_token';
+
+export function getAuthToken() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+export function setAuthToken(token: string) {
+  if (typeof window !== 'undefined') localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearAuthToken() {
+  if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
+}
+
+export async function apiFetch(input: string, init: RequestInit = {}) {
+  const token = getAuthToken();
+  const headers = new Headers(init.headers || {});
+  if (token) headers.set('x-access-token', token);
+  return fetch(input, { ...init, headers });
+}
+
+export async function loginWithPassword(password: string) {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw new Error('Invalid password');
+  const data = await res.json();
+  setAuthToken(data.access_token);
+  return data;
+}
 
 // Accept optional search/filter params
 export async function getPaginatedFaculties(
@@ -15,25 +48,25 @@ export async function getPaginatedFaculties(
   if (filters?.min_score !== undefined) params.append('min_score', filters.min_score.toString());
   if (filters?.max_score !== undefined) params.append('max_score', filters.max_score.toString());
 
-  const res = await fetch(`${API_BASE}/faculties?${params.toString()}`);
+  const res = await apiFetch(`${API_BASE}/faculties?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch faculties: ${res.status}`);
   return res.json();
 }
 
 export async function evaluateFaculty(faculty_id: number) {
-  const res = await fetch(`${API_BASE}/evaluate/${faculty_id}`);
+  const res = await apiFetch(`${API_BASE}/evaluate/${faculty_id}`);
   if (!res.ok) throw new Error('Faculty not found');
   return res.json();
 }
 
 export async function getExplanation(faculty_id: number) {
-  const res = await fetch(`${API_BASE}/explanation/${faculty_id}`);
+  const res = await apiFetch(`${API_BASE}/explanation/${faculty_id}`);
   if (!res.ok) throw new Error('Explanation not found');
   return res.json();
 }
 
 export async function getAudit(faculty_id: number) {
-  const res = await fetch(`${API_BASE}/audit/${faculty_id}`);
+  const res = await apiFetch(`${API_BASE}/audit/${faculty_id}`);
   if (!res.ok) throw new Error('Audit not found');
   return res.json();
 }

@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { LineChart, AlertTriangle, CheckCircle, Play, FlaskConical, TrendingUp, GitCompare, Users } from 'lucide-react';
 
@@ -39,7 +39,7 @@ export default function ValidationPage() {
 
   const fetchLatestReport = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/validation/latest`);
+      const res = await apiFetch(`${API_BASE}/api/validation/latest`);
       if (res.ok) {
         const data = await res.json();
         setReport(data);
@@ -61,7 +61,7 @@ export default function ValidationPage() {
     setRunning(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/validation/run`, {
+      const res = await apiFetch(`${API_BASE}/api/validation/run`, {
         method: 'POST',
       });
       if (!res.ok) {
