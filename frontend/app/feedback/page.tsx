@@ -1,11 +1,21 @@
 'use client';
 import { API_BASE } from '@/lib/api';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { MessageSquare, Send, CheckCircle, Star, Eye, Loader2, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { MessageSquare, Send, CheckCircle, Eye, Loader2, ThumbsUp, ThumbsDown, RefreshCw } from 'lucide-react';
+
+type FeedbackEntry = {
+  id: number;
+  faculty_id: number;
+  faculty_name: string;
+  department: string;
+  understandability_score: number;
+  trust_score: number;
+  comment: string | null;
+  xai_viewed: boolean;
+  submitted_at: string;
+};
 
 export default function FeedbackPage() {
-  const router = useRouter();
   const [facultyId, setFacultyId] = useState('');
   const [understandability, setUnderstandability] = useState(3);
   const [trust, setTrust] = useState(3);
@@ -14,6 +24,35 @@ export default function FeedbackPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([]);
+  const [loadingFeedback, setLoadingFeedback] = useState(true);
+  const [feedbackError, setFeedbackError] = useState('');
+
+  const loadFeedbackEntries = async () => {
+    setLoadingFeedback(true);
+    setFeedbackError('');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback?limit=200`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('Could not load feedback entries');
+      const data = await res.json();
+      setFeedbackEntries(Array.isArray(data.feedback) ? data.feedback : []);
+    } catch {
+      setFeedbackError('Could not load stored feedback from the database.');
+    } finally {
+      setLoadingFeedback(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFeedbackEntries();
+  }, []);
+
+  const formatDate = (value: string) => {
+    if (!value) return 'N/A';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +81,7 @@ export default function FeedbackPage() {
       setTrust(3);
       setComment('');
       setXaiViewed(false);
+      loadFeedbackEntries();
     } catch (err) {
       setMessageType('error');
       setMessage('❌ Error submitting feedback. Please check your connection and try again.');
@@ -52,7 +92,7 @@ export default function FeedbackPage() {
 
   return (
     <div className="min-h-screen gradient-mesh">
-      <div className="max-w-4xl mx-auto px-6 lg:px-8 pt-28 pb-16">
+      <div className="max-w-6xl mx-auto px-6 lg:px-8 pt-28 pb-16">
         
         {/* Page Header */}
         <div className="mb-10 animate-fade-in-up">
@@ -311,6 +351,99 @@ export default function FeedbackPage() {
             </div>
           </div>
         </form>
+
+        {/* Stored Feedback Table */}
+        <section className="mt-12 animate-fade-in-up delay-300">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="h-8 w-1.5 rounded-full bg-gradient-to-b from-violet-500 to-purple-600" />
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+                  Submitted Faculty Feedback
+                </h2>
+                <p className="mt-0.5 text-sm font-medium text-gray-500 dark:text-gray-400">
+                  Latest feedback records stored in the database
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={loadFeedbackEntries}
+              disabled={loadingFeedback}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-bold text-violet-700 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-violet-900/40 dark:bg-white/5 dark:text-violet-300 dark:hover:bg-violet-950/20"
+            >
+              <RefreshCw className={`h-4 w-4 ${loadingFeedback ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-xl dark:border-white/5 dark:bg-[#12121a]">
+            {loadingFeedback ? (
+              <div className="p-8 text-center text-sm font-semibold text-gray-500 dark:text-gray-400">
+                Loading stored feedback...
+              </div>
+            ) : feedbackError ? (
+              <div className="m-6 rounded-2xl border border-red-200 bg-red-50 p-5 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                {feedbackError}
+              </div>
+            ) : feedbackEntries.length === 0 ? (
+              <div className="p-8 text-center text-sm font-semibold text-gray-500 dark:text-gray-400">
+                No feedback has been submitted yet. New responses will appear here automatically after submission.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-100 dark:divide-white/5">
+                  <thead className="bg-gray-50/80 dark:bg-white/[0.03]">
+                    <tr>
+                      <th className="px-5 py-4 text-left text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Faculty</th>
+                      <th className="px-5 py-4 text-left text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Department</th>
+                      <th className="px-5 py-4 text-center text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Understandability</th>
+                      <th className="px-5 py-4 text-center text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Trust</th>
+                      <th className="px-5 py-4 text-center text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">XAI Viewed</th>
+                      <th className="px-5 py-4 text-left text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Comment</th>
+                      <th className="px-5 py-4 text-left text-xs font-black uppercase tracking-wider text-gray-500 dark:text-gray-400">Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-white/5">
+                    {feedbackEntries.map((entry) => (
+                      <tr key={entry.id} className="transition hover:bg-violet-50/40 dark:hover:bg-white/[0.03]">
+                        <td className="px-5 py-4 align-top">
+                          <div className="font-bold text-gray-900 dark:text-white">{entry.faculty_name}</div>
+                          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">ID: {entry.faculty_id}</div>
+                        </td>
+                        <td className="px-5 py-4 align-top text-sm font-semibold text-gray-600 dark:text-gray-300">
+                          {entry.department}
+                        </td>
+                        <td className="px-5 py-4 text-center align-top">
+                          <span className="inline-flex min-w-10 justify-center rounded-full bg-blue-50 px-3 py-1 text-sm font-black text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
+                            {entry.understandability_score}/5
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-center align-top">
+                          <span className="inline-flex min-w-10 justify-center rounded-full bg-emerald-50 px-3 py-1 text-sm font-black text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                            {entry.trust_score}/5
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-center align-top">
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${entry.xai_viewed ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300' : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'}`}>
+                            {entry.xai_viewed ? 'Yes' : 'No'}
+                          </span>
+                        </td>
+                        <td className="max-w-md px-5 py-4 align-top text-sm font-medium text-gray-600 dark:text-gray-300">
+                          {entry.comment || <span className="text-gray-400 dark:text-gray-500">No comment</span>}
+                        </td>
+                        <td className="px-5 py-4 align-top text-xs font-semibold text-gray-500 dark:text-gray-400">
+                          {formatDate(entry.submitted_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

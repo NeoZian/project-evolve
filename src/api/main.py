@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import sqlalchemy as sa
 import numpy as np
 import json
@@ -120,6 +120,8 @@ def make_serializable(data):
         if math.isnan(data) or math.isinf(data):
             return None
         return data
+    if isinstance(data, (datetime, date)):
+        return data.isoformat()
     if isinstance(data, np.ndarray):
         return make_serializable(data.tolist())
     if isinstance(data, pd.Series):
@@ -364,6 +366,46 @@ if blockchain_available and CONTRACT_ADDRESS:
 @app.get("/")
 async def root():
     return {"message": "Project Evolve API is running."}
+
+
+@app.get("/api/feedback")
+async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
+    """Return submitted faculty feedback for display on the feedback page."""
+    try:
+        df = pd.read_sql(
+            sa.text("""
+                WITH faculty_lookup AS (
+                    SELECT
+                        faculty_id,
+                        MAX(faculty_name) AS faculty_name,
+                        MAX(department) AS department
+                    FROM evaluation_results
+                    GROUP BY faculty_id
+                )
+                SELECT
+                    ff.id,
+                    ff.faculty_id,
+                    COALESCE(fl.faculty_name, 'Unknown Faculty') AS faculty_name,
+                    COALESCE(fl.department, 'N/A') AS department,
+                    ff.understandability_score,
+                    ff.trust_score,
+                    ff.comment,
+                    ff.xai_viewed,
+                    ff.submitted_at
+                FROM faculty_feedback ff
+                LEFT JOIN faculty_lookup fl ON fl.faculty_id = ff.faculty_id
+                ORDER BY ff.submitted_at DESC, ff.id DESC
+                LIMIT :limit
+            """),
+            engine,
+            params={"limit": limit}
+        )
+        return {
+            "feedback": make_serializable(df.to_dict(orient="records")),
+            "total": int(len(df))
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Feedback list unavailable: {e}")
 
 
 @app.post("/api/feedback")
