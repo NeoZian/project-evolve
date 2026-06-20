@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
+import { loginBackendWithPassword } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -34,6 +35,13 @@ export default function LoginPage() {
 
       if (!response.ok) {
         setError('Incorrect password. Please try again.');
+        return;
+      }
+
+      try {
+        await loginBackendWithPassword(password);
+      } catch {
+        setError('Password accepted, but the backend API could not be unlocked. Please check Render deployment and CORS settings.');
         return;
       }
 

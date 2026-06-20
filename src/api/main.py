@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 import pandas as pd
 from datetime import datetime, timedelta, date
 import sqlalchemy as sa
@@ -103,6 +103,34 @@ class FeedbackCreate(BaseModel):
     trust_score: int
     comment: Optional[str] = None
     xai_viewed: bool = False
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+APP_PASSWORD = os.getenv("APP_PASSWORD") or os.getenv("SITE_PASSWORD") or "ProjectEvolve@2026"
+APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN") or hashlib.sha256(
+    f"project-evolve:{APP_PASSWORD}".encode()
+).hexdigest()
+
+
+@app.middleware("http")
+async def simple_password_gate(request: Request, call_next):
+    public_paths = {"/", "/health", "/api/auth/login"}
+    if request.method == "OPTIONS" or request.url.path in public_paths or request.url.path.startswith("/reports"):
+        return await call_next(request)
+    token = request.headers.get("x-access-token")
+    if token != APP_ACCESS_TOKEN:
+        return JSONResponse(status_code=401, content={"detail": "Login required"})
+    return await call_next(request)
+
+
+@app.post("/api/auth/login")
+async def login(payload: LoginRequest):
+    if payload.password != APP_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    return {"access_token": APP_ACCESS_TOKEN}
 
 
 def make_serializable(data):
@@ -372,14 +400,24 @@ async def root():
 async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
     """Return submitted faculty feedback for display on the feedback page.
 
-    The project has used two Supabase schemas over time:
-    - newer local schema: id + submitted_at
-    - deployed dump schema: feedback_id + created_at
-
-    This endpoint detects the active column names so the same code works
-    with both local and deployed databases.
+    Supports both database schemas used by this project:
+    - local/newer: id + submitted_at
+    - Supabase dump/older: feedback_id + created_at
     """
     try:
+        inspector = sa.inspect(engine)
+        if not inspector.has_table("faculty_feedback"):
+            return {
+                "feedback": [],
+                "summary": {
+                    "total": 0,
+                    "avg_understandability": None,
+                    "avg_trust": None,
+                    "xai_viewed_count": 0,
+                },
+                "total": 0,
+            }
+
         with engine.begin() as conn:
             columns = {
                 row[0]
@@ -396,8 +434,12 @@ async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
         id_column = "id" if "id" in columns else "feedback_id"
         timestamp_column = "submitted_at" if "submitted_at" in columns else "created_at"
 
-        df = pd.read_sql(
-            sa.text(f"""
+        faculty_lookup_sql = ""
+        faculty_join_sql = ""
+        faculty_name_sql = "'Unknown Faculty' AS faculty_name"
+        department_sql = "'N/A' AS department"
+        if inspector.has_table("evaluation_results"):
+            faculty_lookup_sql = """
                 WITH faculty_lookup AS (
                     SELECT
                         faculty_id,
@@ -406,27 +448,49 @@ async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
                     FROM evaluation_results
                     GROUP BY faculty_id
                 )
+            """
+            faculty_join_sql = "LEFT JOIN faculty_lookup fl ON fl.faculty_id = ff.faculty_id"
+            faculty_name_sql = "COALESCE(fl.faculty_name, 'Unknown Faculty') AS faculty_name"
+            department_sql = "COALESCE(fl.department, 'N/A') AS department"
+
+        df = pd.read_sql(
+            sa.text(f"""
+                {faculty_lookup_sql}
                 SELECT
                     ff.{id_column} AS id,
                     ff.faculty_id,
-                    COALESCE(fl.faculty_name, 'Unknown Faculty') AS faculty_name,
-                    COALESCE(fl.department, 'N/A') AS department,
+                    {faculty_name_sql},
+                    {department_sql},
                     ff.understandability_score,
                     ff.trust_score,
                     ff.comment,
                     ff.xai_viewed,
                     ff.{timestamp_column} AS submitted_at
                 FROM faculty_feedback ff
-                LEFT JOIN faculty_lookup fl ON fl.faculty_id = ff.faculty_id
+                {faculty_join_sql}
                 ORDER BY ff.{timestamp_column} DESC, ff.{id_column} DESC
                 LIMIT :limit
             """),
             engine,
             params={"limit": limit}
         )
+
+        summary = pd.read_sql(
+            sa.text("""
+                SELECT
+                    COUNT(*) AS total,
+                    AVG(understandability_score) AS avg_understandability,
+                    AVG(trust_score) AS avg_trust,
+                    SUM(CASE WHEN xai_viewed THEN 1 ELSE 0 END) AS xai_viewed_count
+                FROM faculty_feedback
+            """),
+            engine
+        ).iloc[0].to_dict()
+
         return {
             "feedback": make_serializable(df.to_dict(orient="records")),
-            "total": int(len(df))
+            "summary": make_serializable(summary),
+            "total": int(summary.get("total") or 0),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Feedback list unavailable: {e}")
