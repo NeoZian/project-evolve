@@ -10,6 +10,10 @@ import json
 import hashlib
 from web3 import Web3
 from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.pdfgen import canvas
 import io
 import glob
@@ -869,33 +873,277 @@ async def verify_blockchain(faculty_id: int):
 
 @app.get("/export_pdf/{faculty_id}")
 async def export_audit_pdf(faculty_id: int):
+    """Generate a complete faculty audit PDF with evaluation factors, recommendations, and blockchain hashes."""
+
+    def fmt(value, default="Not available"):
+        if value is None:
+            return default
+        try:
+            if pd.isna(value):
+                return default
+        except Exception:
+            pass
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.2f}"
+        return str(value)
+
+    def score(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
     df_db = pd.read_sql(
-        sa.text("SELECT * FROM evaluation_results WHERE faculty_id = :faculty_id"),
+        sa.text("""
+            SELECT
+                faculty_id,
+                faculty_name,
+                department,
+                ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score,
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
+                ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
+                ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
+                ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
+                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade
+            FROM evaluation_results
+            WHERE faculty_id = :faculty_id
+            GROUP BY faculty_id, faculty_name, department
+        """),
         engine,
         params={"faculty_id": faculty_id}
     )
     if df_db.empty:
         raise HTTPException(status_code=404, detail="Faculty not found")
+
     row = df_db.iloc[0]
-    onchain_hash = "Blockchain_Not_Available"
-    onchain_time = datetime.utcnow()
-    if contract is not None:
+    final_score = score(row.get("final_evaluation_score"))
+    student_feedback = score(row.get("student_feedback_rating"))
+    peer_review = score(row.get("peer_score"))
+    nlp_sentiment = score(row.get("nlp_sentiment_score"))
+    performance = score(row.get("avg_grade"))
+    course_quality = score(row.get("course_quality_score"))
+
+    result_hash = "Not available"
+    transaction_hash = "Not available"
+    audit_timestamp = "Not available"
+    audit_status = "No blockchain audit record was found for this faculty member."
+
+    inspector = sa.inspect(engine)
+    try:
+        if inspector.has_table("evaluation_results_with_blockchain"):
+            audit_df = pd.read_sql(
+                sa.text("""
+                    SELECT *
+                    FROM evaluation_results_with_blockchain
+                    WHERE faculty_id = :faculty_id
+                    LIMIT 1
+                """),
+                engine,
+                params={"faculty_id": faculty_id}
+            )
+            if not audit_df.empty:
+                audit_row = audit_df.iloc[0]
+                result_hash = fmt(audit_row.get("result_hash"), result_hash)
+                transaction_hash = fmt(audit_row.get("blockchain_tx_hash"), transaction_hash)
+                audit_timestamp = fmt(audit_row.get("timestamp", audit_row.get("logged_at")), audit_timestamp)
+                audit_status = "Tamper-proof audit record available on private blockchain."
+
+        if (transaction_hash == "Not available" or result_hash == "Not available") and inspector.has_table("blockchain_audit_logs"):
+            log_df = pd.read_sql(
+                sa.text("""
+                    SELECT result_hash, blockchain_tx_hash, timestamp, status
+                    FROM blockchain_audit_logs
+                    WHERE faculty_id = :faculty_id
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """),
+                engine,
+                params={"faculty_id": faculty_id}
+            )
+            if not log_df.empty:
+                log_row = log_df.iloc[0]
+                result_hash = fmt(log_row.get("result_hash"), result_hash)
+                transaction_hash = fmt(log_row.get("blockchain_tx_hash"), transaction_hash)
+                audit_timestamp = fmt(log_row.get("timestamp"), audit_timestamp)
+                audit_status = fmt(log_row.get("status"), audit_status)
+    except Exception as e:
+        print(f"PDF audit lookup failed: {e}")
+
+    if contract is not None and result_hash == "Not available":
         try:
             onchain = contract.functions.getEvaluation(faculty_id).call()
-            onchain_hash = onchain[2]
-            onchain_time = datetime.fromtimestamp(onchain[1])
+            result_hash = fmt(onchain[2], result_hash)
+            audit_timestamp = fmt(datetime.fromtimestamp(onchain[1]), audit_timestamp)
+            audit_status = "Result hash was retrieved from the private blockchain contract."
         except Exception as e:
-            print(f"PDF blockchain lookup failed: {e}")
+            print(f"PDF blockchain contract lookup failed: {e}")
+
+    recommendations = []
+    if nlp_sentiment < 3:
+        recommendations.append([
+            "Improve Clarity in Explanations",
+            "Student comments and NLP topic modeling indicate possible confusion in course delivery. Add concrete examples, visual aids, and short summary recaps during lectures."
+        ])
+    if student_feedback < 3.5:
+        recommendations.append([
+            "Boost Student Engagement",
+            "Student feedback is below the preferred range. Increase interactive activities, office-hour visibility, and opportunities for student participation."
+        ])
+    if peer_review < 3.5:
+        recommendations.append([
+            "Schedule Peer Observation",
+            "Peer review score is below the target level. A peer teaching observation can identify practical pedagogical improvements."
+        ])
+    if course_quality < 3.5:
+        recommendations.append([
+            "Strengthen Course Materials",
+            "Course quality score suggests room for improvement. Review syllabus alignment, learning materials, assignments, and assessment rubrics."
+        ])
+    if performance < 3.5:
+        recommendations.append([
+            "Support Student Success",
+            "Student performance indicators are below the target range. Consider early intervention, formative assessments, and additional learning support."
+        ])
+    if final_score > 4.2:
+        recommendations.append([
+            "Exceptional Performance",
+            "Outstanding results across evaluation metrics. Continue current best practices and consider mentoring junior faculty or leading departmental initiatives."
+        ])
+    if not recommendations:
+        recommendations.append([
+            "Maintain Continuous Improvement",
+            "Overall indicators are stable. Continue monitoring student feedback, peer observations, course quality, and performance outcomes each term."
+        ])
+
+    shap_summary = "Explanation not available. Run SHAP precomputation first."
+    try:
+        df_shap = pd.read_sql(
+            sa.text("""
+                SELECT shap_values_json, base_value
+                FROM shap_explanations
+                WHERE faculty_id = :faculty_id
+            """),
+            engine,
+            params={"faculty_id": faculty_id}
+        )
+        if not df_shap.empty:
+            shap_dict = json.loads(df_shap.iloc[0]["shap_values_json"])
+            ordered = sorted(shap_dict.items(), key=lambda item: abs(float(item[1])), reverse=True)[:5]
+            shap_summary = ", ".join([f"{k.replace('_', ' ').title()}: {float(v):+.3f}" for k, v in ordered])
+    except Exception as e:
+        print(f"PDF SHAP lookup failed: {e}")
+
     buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    c.drawString(100, 750, f"Audit Report for Faculty ID: {faculty_id}")
-    c.drawString(100, 730, f"Name: {row['faculty_name']}")
-    c.drawString(100, 710, f"Department: {row['department']}")
-    c.drawString(100, 690, f"Final Score: {row['final_evaluation_score']}")
-    c.drawString(100, 670, f"On-chain Hash: {onchain_hash}")
-    c.drawString(100, 650, f"Timestamp: {onchain_time}")
-    c.drawString(100, 630, "This report is generated by Project Evolve.")
-    c.save()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.65 * inch,
+        leftMargin=0.65 * inch,
+        topMargin=0.55 * inch,
+        bottomMargin=0.55 * inch,
+        title=f"Project Evolve Audit Report - Faculty {faculty_id}"
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ProjectEvolveTitle",
+        parent=styles["Title"],
+        fontSize=18,
+        leading=22,
+        spaceAfter=12,
+        textColor=colors.HexColor("#1f2937")
+    )
+    section_style = ParagraphStyle(
+        "ProjectEvolveSection",
+        parent=styles["Heading2"],
+        fontSize=13,
+        leading=16,
+        spaceBefore=10,
+        spaceAfter=8,
+        textColor=colors.HexColor("#1d4ed8")
+    )
+    normal = ParagraphStyle(
+        "ProjectEvolveNormal",
+        parent=styles["BodyText"],
+        fontSize=9.5,
+        leading=13,
+        spaceAfter=6,
+    )
+    small = ParagraphStyle(
+        "ProjectEvolveSmall",
+        parent=styles["BodyText"],
+        fontSize=8,
+        leading=10,
+    )
+
+    def p(text, style=normal):
+        return Paragraph(str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), style)
+
+    def table(rows, widths=None):
+        t = Table(rows, colWidths=widths, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e5edff")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("LEADING", (0, 0), (-1, -1), 10.5),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        return t
+
+    story = []
+    story.append(Paragraph("Project Evolve - Complete Faculty Audit Report", title_style))
+    story.append(p(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC", small))
+    story.append(Spacer(1, 8))
+
+    story.append(Paragraph("Faculty Overview", section_style))
+    story.append(table([
+        [p("Field", small), p("Value", small)],
+        [p("Faculty ID", small), p(faculty_id, small)],
+        [p("Name", small), p(fmt(row.get("faculty_name")), small)],
+        [p("Department", small), p(fmt(row.get("department")), small)],
+        [p("Final Evaluation Score", small), p(fmt(final_score), small)],
+    ], [2.0 * inch, 4.3 * inch]))
+
+    story.append(Paragraph("Evaluation Factors", section_style))
+    story.append(table([
+        [p("Factor", small), p("Score / Value", small), p("Purpose", small)],
+        [p("Student Feedback", small), p(fmt(student_feedback), small), p("Aggregated student survey rating.", small)],
+        [p("Peer Review", small), p(fmt(peer_review), small), p("Structured peer evaluation score.", small)],
+        [p("NLP Sentiment", small), p(fmt(nlp_sentiment), small), p("Sentiment analysis of qualitative comments.", small)],
+        [p("Student Performance", small), p(fmt(performance), small), p("Anonymised grade or success-rate indicator.", small)],
+        [p("Course Quality", small), p(fmt(course_quality), small), p("Course material and design quality indicator.", small)],
+    ], [2.0 * inch, 1.3 * inch, 3.0 * inch]))
+
+    story.append(Paragraph("Explainable AI Summary", section_style))
+    story.append(p(shap_summary, normal))
+
+    story.append(Paragraph("Blockchain Audit Details", section_style))
+    story.append(table([
+        [p("Audit Field", small), p("Value", small)],
+        [p("Transaction Hash", small), p(transaction_hash, small)],
+        [p("Result Hash", small), p(result_hash, small)],
+        [p("Audit Timestamp", small), p(audit_timestamp, small)],
+        [p("Audit Status", small), p(audit_status, small)],
+    ], [2.0 * inch, 4.3 * inch]))
+
+    story.append(Paragraph("Actionable Recommendations", section_style))
+    recommendation_rows = [[p("Recommendation", small), p("Details", small)]]
+    recommendation_rows.extend([[p(title, small), p(detail, small)] for title, detail in recommendations])
+    story.append(table(recommendation_rows, [2.0 * inch, 4.3 * inch]))
+
+    story.append(Spacer(1, 10))
+    story.append(p("This report is generated by Project Evolve to support fair, transparent, and auditable faculty development decisions.", small))
+
+    doc.build(story)
     buffer.seek(0)
     return Response(
         content=buffer.getvalue(),
