@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const SITE_PASSWORD = process.env.SITE_PASSWORD || 'ProjectEvolve@2026';
+const SITE_PASSWORD = process.env.APP_PASSWORD || process.env.SITE_PASSWORD || 'ProjectEvolve@2026';
 const AUTH_COOKIE = 'project_evolve_auth';
 
 export async function POST(request: NextRequest) {

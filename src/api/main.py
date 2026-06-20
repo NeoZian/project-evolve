@@ -370,10 +370,34 @@ async def root():
 
 @app.get("/api/feedback")
 async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
-    """Return submitted faculty feedback for display on the feedback page."""
+    """Return submitted faculty feedback for display on the feedback page.
+
+    The project has used two Supabase schemas over time:
+    - newer local schema: id + submitted_at
+    - deployed dump schema: feedback_id + created_at
+
+    This endpoint detects the active column names so the same code works
+    with both local and deployed databases.
+    """
     try:
+        with engine.begin() as conn:
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    sa.text("""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'faculty_feedback'
+                    """)
+                )
+            }
+
+        id_column = "id" if "id" in columns else "feedback_id"
+        timestamp_column = "submitted_at" if "submitted_at" in columns else "created_at"
+
         df = pd.read_sql(
-            sa.text("""
+            sa.text(f"""
                 WITH faculty_lookup AS (
                     SELECT
                         faculty_id,
@@ -383,7 +407,7 @@ async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
                     GROUP BY faculty_id
                 )
                 SELECT
-                    ff.id,
+                    ff.{id_column} AS id,
                     ff.faculty_id,
                     COALESCE(fl.faculty_name, 'Unknown Faculty') AS faculty_name,
                     COALESCE(fl.department, 'N/A') AS department,
@@ -391,10 +415,10 @@ async def get_feedback_entries(limit: int = Query(100, ge=1, le=500)):
                     ff.trust_score,
                     ff.comment,
                     ff.xai_viewed,
-                    ff.submitted_at
+                    ff.{timestamp_column} AS submitted_at
                 FROM faculty_feedback ff
                 LEFT JOIN faculty_lookup fl ON fl.faculty_id = ff.faculty_id
-                ORDER BY ff.submitted_at DESC, ff.id DESC
+                ORDER BY ff.{timestamp_column} DESC, ff.{id_column} DESC
                 LIMIT :limit
             """),
             engine,
