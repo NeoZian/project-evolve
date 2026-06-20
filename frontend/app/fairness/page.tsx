@@ -17,13 +17,17 @@ interface FairnessReport {
     mean_score_by_gender: Record<string, number>;
     count_by_gender: Record<string, number>;
   };
+  selected_department?: string;
+  available_departments?: string[];
   injected_bias_analysis: {
     bias_detected: boolean;
     message: string;
-    target_group_mean_peer: number;
-    control_group_mean_peer: number;
-    difference: number;
+    selected_department?: string;
+    target_group_mean_peer: number | null;
+    control_group_mean_peer: number | null;
+    difference: number | null;
   };
+  department_peer_by_gender?: Record<string, number>;
   plot_path: string;
 }
 
@@ -32,6 +36,21 @@ export default function FairnessPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [selectedDepartment, setSelectedDepartment] = useState('');
+
+  const fetchDepartments = async () => {
+    try {
+      const res = await apiFetch(`${API_BASE}/api/fairness/departments`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data.departments) ? data.departments : [];
+      setDepartments(list);
+      setSelectedDepartment((current) => current || list[0] || '');
+    } catch (err) {
+      console.error('Could not load departments', err);
+    }
+  };
 
   const fetchLatestReport = async () => {
     try {
@@ -39,6 +58,12 @@ export default function FairnessPage() {
       if (res.ok) {
         const data = await res.json();
         setReport(data);
+        if (data?.selected_department) {
+          setSelectedDepartment(data.selected_department);
+        }
+        if (Array.isArray(data?.available_departments) && data.available_departments.length > 0) {
+          setDepartments(data.available_departments);
+        }
         setError(null);
       } else if (res.status === 404) {
         setError('No fairness report found. Click "Run Fairness Audit" to generate one.');
@@ -57,7 +82,8 @@ export default function FairnessPage() {
     setRunning(true);
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/api/fairness/run`, {
+      const params = selectedDepartment ? `?department=${encodeURIComponent(selectedDepartment)}` : '';
+      const res = await apiFetch(`${API_BASE}/api/fairness/run${params}`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -74,6 +100,7 @@ export default function FairnessPage() {
   };
 
   useEffect(() => {
+    fetchDepartments();
     fetchLatestReport();
   }, []);
 
@@ -114,10 +141,29 @@ export default function FairnessPage() {
               </div>
             </div>
 
-            {/* Run Audit Button */}
+            {/* Department Selector + Run Audit Button */}
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+              <label className="flex flex-col gap-2 text-sm font-bold text-gray-700 dark:text-gray-300">
+                Select Department
+                <select
+                  value={selectedDepartment}
+                  onChange={(event) => setSelectedDepartment(event.target.value)}
+                  disabled={running || departments.length === 0}
+                  className="min-w-[260px] rounded-2xl border border-blue-200/70 bg-white px-4 py-3 text-sm font-semibold text-gray-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-[#12121a] dark:text-white"
+                >
+                  {departments.length === 0 ? (
+                    <option value="">Loading departments...</option>
+                  ) : (
+                    departments.map((department) => (
+                      <option key={department} value={department}>{department}</option>
+                    ))
+                  )}
+                </select>
+              </label>
+
             <button
               onClick={runFairnessAudit}
-              disabled={running}
+              disabled={running || departments.length === 0}
               className="group relative inline-flex items-center gap-3 px-7 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 
                        text-white font-bold text-sm rounded-2xl shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/35 
                        disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-300 hover:-translate-y-0.5"
@@ -134,6 +180,7 @@ export default function FairnessPage() {
                 </>
               )}
             </button>
+            </div>
           </div>
           
           {/* Timestamp */}
@@ -141,6 +188,7 @@ export default function FairnessPage() {
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
               <Scale className="w-4 h-4" strokeWidth={2} />
               Last updated: {new Date(report.timestamp).toLocaleString()}
+              {report.selected_department && ` • Department view: ${report.selected_department}`}
             </div>
           )}
         </div>
@@ -383,7 +431,7 @@ export default function FairnessPage() {
             <div className="mb-10">
               <div className="flex items-center gap-3 mb-6">
                 <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" strokeWidth={2} />
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Injected Bias Detection</h2>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Selected Department Peer-Score Bias Detection</h2>
               </div>
               
               <div className="bg-white dark:bg-[#12121a] rounded-3xl p-8 lg:p-10 border-2 border-amber-200/60 dark:border-amber-800/30 shadow-lg">
@@ -395,10 +443,10 @@ export default function FairnessPage() {
                   {/* Target Group */}
                   <div className="bg-gradient-to-br from-rose-50 to-white dark:from-rose-950/20 dark:to-transparent rounded-2xl p-6 border border-rose-200/50 dark:border-rose-800/20 text-center">
                     <p className="text-xs font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400 mb-3">
-                      Female (CS/Eng)
+                      Female ({report.selected_department || selectedDepartment || 'Selected Dept'})
                     </p>
                     <p className="text-4xl font-black text-rose-700 dark:text-rose-300 tabular-nums">
-                      {report.injected_bias_analysis.target_group_mean_peer}
+                      {report.injected_bias_analysis.target_group_mean_peer ?? 'N/A'}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 font-semibold">Peer Score Avg</p>
                   </div>
@@ -406,10 +454,10 @@ export default function FairnessPage() {
                   {/* Control Group */}
                   <div className="bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-transparent rounded-2xl p-6 border border-blue-200/50 dark:border-blue-800/20 text-center">
                     <p className="text-xs font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400 mb-3">
-                      Male (CS/Eng)
+                      Male ({report.selected_department || selectedDepartment || 'Selected Dept'})
                     </p>
                     <p className="text-4xl font-black text-blue-700 dark:text-blue-300 tabular-nums">
-                      {report.injected_bias_analysis.control_group_mean_peer}
+                      {report.injected_bias_analysis.control_group_mean_peer ?? 'N/A'}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 font-semibold">Peer Score Avg</p>
                   </div>
@@ -420,7 +468,7 @@ export default function FairnessPage() {
                       Difference
                     </p>
                     <p className="text-4xl font-black text-red-700 dark:text-red-300 tabular-nums">
-                      {report.injected_bias_analysis.difference}
+                      {report.injected_bias_analysis.difference ?? 'N/A'}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 font-semibold">Score Gap</p>
                   </div>
@@ -433,7 +481,7 @@ export default function FairnessPage() {
               <div className="animate-fade-in-up">
                 <div className="flex items-center gap-3 mb-6">
                   <BarChart3 className="w-6 h-6 text-indigo-600 dark:text-indigo-400" strokeWidth={2} />
-                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Visualizations</h2>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Visualizations {report.selected_department ? `for ${report.selected_department}` : ''}</h2>
                 </div>
                 
                 <div className="bg-white dark:bg-[#12121a] rounded-3xl p-8 border-2 border-indigo-200/60 dark:border-indigo-800/30 shadow-lg overflow-hidden">

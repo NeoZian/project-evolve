@@ -2,11 +2,13 @@
 Fairness & Bias Audit Module for Project Evolve.
 
 This module audits demographic parity, group score gaps, department gaps,
-and intentionally injected synthetic bias. Equalized odds is not reported as a
-final metric because the prototype does not have real expert ground-truth
-labels; that limitation is explicitly stated in the JSON/HTML reports.
+and a selected-department peer-review bias visualization. Equalized odds is not
+reported as a final metric because the prototype does not have real expert
+ground-truth labels; that limitation is explicitly stated in the JSON/HTML
+reports.
 """
 
+import argparse
 import os
 import json
 from datetime import datetime
@@ -22,6 +24,7 @@ from sqlalchemy import create_engine, text
 
 THRESHOLD = 0.1
 SCORE_THRESHOLD = 4.0
+DEFAULT_DEPARTMENT_PATTERN = "CS|Engineering|Computer Science"
 
 
 def convert_to_serializable(obj):
@@ -56,44 +59,62 @@ def load_data(engine):
             e.avg_grade
         FROM evaluation_results e
     """, engine)
+    df["department"] = df["department"].fillna("Unknown")
     return df
 
 
-def detect_injected_bias(df):
-    """Detect synthetic peer-review bias against female faculty in CS/Engineering."""
-    target_group = (
-        (df["gender"] == "Female") &
-        df["department"].str.contains("CS|Engineering|Computer Science", case=False, na=False)
-    )
-    control_group = (
-        (df["gender"] == "Male") &
-        df["department"].str.contains("CS|Engineering|Computer Science", case=False, na=False)
-    )
+def resolve_selected_department(df, selected_department=None):
+    """Return a valid department name for department-specific visualizations."""
+    departments = sorted(str(d) for d in df["department"].dropna().unique())
+    if selected_department:
+        for department in departments:
+            if department.lower() == selected_department.lower():
+                return department
+        # Allow partial matches from URL/query parameters.
+        for department in departments:
+            if selected_department.lower() in department.lower():
+                return department
+    if departments:
+        # Preserve the old demo emphasis when available, otherwise use first department.
+        cs_like = df[df["department"].str.contains(DEFAULT_DEPARTMENT_PATTERN, case=False, na=False)]
+        if not cs_like.empty:
+            return str(cs_like.iloc[0]["department"])
+        return departments[0]
+    return "Unknown"
 
-    if target_group.sum() == 0 or control_group.sum() == 0:
+
+def detect_department_peer_bias(df, selected_department):
+    """Detect peer-review score gaps by gender inside the selected department."""
+    dept_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
+    target_group = dept_df[dept_df["gender"] == "Female"]
+    control_group = dept_df[dept_df["gender"] == "Male"]
+
+    if target_group.empty or control_group.empty:
         return {
             "bias_detected": False,
             "reason": "Insufficient data",
+            "selected_department": selected_department,
             "target_group_mean_peer": None,
             "control_group_mean_peer": None,
             "difference": None,
-            "message": "Insufficient data to detect injected CS/Engineering peer-review bias."
+            "message": f"Insufficient male/female peer-review data to detect department-specific peer-score bias in {selected_department}."
         }
 
-    mean_peer_target = float(df.loc[target_group, "peer_score"].mean())
-    mean_peer_control = float(df.loc[control_group, "peer_score"].mean())
+    mean_peer_target = float(target_group["peer_score"].mean())
+    mean_peer_control = float(control_group["peer_score"].mean())
     diff = mean_peer_control - mean_peer_target
     bias_detected = bool(diff > 0.2)
 
     return {
         "bias_detected": bias_detected,
+        "selected_department": selected_department,
         "target_group_mean_peer": round(mean_peer_target, 3),
         "control_group_mean_peer": round(mean_peer_control, 3),
         "difference": round(float(diff), 3),
         "message": (
-            f"Female faculty in CS/Engineering have {diff:.2f} lower peer scores than male colleagues."
+            f"Female faculty in {selected_department} have {diff:.2f} lower peer scores than male colleagues."
             if bias_detected else
-            "No significant injected peer-review bias detected."
+            f"No significant peer-review score gap detected in {selected_department}."
         )
     }
 
@@ -149,9 +170,11 @@ def compute_fairness_metrics(df):
     }
 
 
-def generate_fairness_report(df, metrics, injected_bias_result, output_dir="reports"):
+def generate_fairness_report(df, metrics, department_bias_result, selected_department, output_dir="reports"):
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    dept_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
 
     plt.figure(figsize=(12, 5))
 
@@ -161,17 +184,17 @@ def generate_fairness_report(df, metrics, injected_bias_result, output_dir="repo
     plt.ylabel("Evaluation Score")
 
     plt.subplot(1, 2, 2)
-    cs_eng = df[df["department"].str.contains("CS|Engineering|Computer Science", case=False, na=False)]
-    if not cs_eng.empty:
-        sns.boxplot(data=cs_eng, x="gender", y="peer_score", hue="gender", palette="Set1", legend=False)
-        plt.title("Peer Score in CS/Engineering Departments")
+    if not dept_df.empty:
+        sns.boxplot(data=dept_df, x="gender", y="peer_score", hue="gender", palette="Set1", legend=False)
+        plt.title(f"Peer Score in {selected_department} Department")
         plt.ylabel("Peer Score")
     else:
-        plt.text(0.5, 0.5, "No CS/Engineering faculty data", ha="center", va="center")
-        plt.title("Peer Score in CS/Engineering Departments")
+        plt.text(0.5, 0.5, f"No faculty data for {selected_department}", ha="center", va="center")
+        plt.title(f"Peer Score in {selected_department} Department")
 
     plt.tight_layout()
-    plot_path = os.path.join(output_dir, f"fairness_plots_{timestamp}.png")
+    safe_department = "".join(c if c.isalnum() else "_" for c in str(selected_department)).strip("_") or "department"
+    plot_path = os.path.join(output_dir, f"fairness_plots_{safe_department}_{timestamp}.png")
     plt.savefig(plot_path)
     plt.close()
 
@@ -182,21 +205,31 @@ def generate_fairness_report(df, metrics, injected_bias_result, output_dir="repo
         alert_messages.append(
             f"Demographic parity difference ({metrics['demographic_parity_difference']}) exceeds threshold {THRESHOLD}."
         )
-    if injected_bias_result.get("bias_detected", False):
+    if department_bias_result.get("bias_detected", False):
         bias_alert = True
-        alert_messages.append(injected_bias_result["message"])
+        alert_messages.append(department_bias_result["message"])
+
+    department_peer_by_gender = {}
+    if not dept_df.empty:
+        department_peer_by_gender = {
+            str(k): float(v)
+            for k, v in dept_df.groupby("gender")["peer_score"].mean().to_dict().items()
+        }
 
     report = {
         "timestamp": timestamp,
         "threshold": THRESHOLD,
         "score_threshold": SCORE_THRESHOLD,
+        "selected_department": selected_department,
+        "available_departments": sorted(str(d) for d in df["department"].dropna().unique()),
         "bias_alert": bias_alert,
-        "alert_message": " ".join(alert_messages),
+        "alert_message": " ".join(alert_messages) if alert_messages else f"No critical bias alert for the selected department: {selected_department}.",
         "fairness_metrics": metrics,
-        "injected_bias_analysis": injected_bias_result,
+        "injected_bias_analysis": department_bias_result,
+        "department_peer_by_gender": department_peer_by_gender,
         "plot_path": plot_path,
         "methodology_note": (
-            "This prototype audits demographic parity, score gaps, and synthetic injected bias. "
+            "This prototype audits demographic parity, score gaps, and selected-department peer-review score gaps. "
             "Equalized odds is deferred until real expert ground-truth labels are collected."
         )
     }
@@ -223,11 +256,12 @@ def generate_fairness_report(df, metrics, injected_bias_result, output_dir="repo
     <body>
     <h1>Fairness Audit Report - Project Evolve</h1>
     <p>Generated: {{ timestamp }}</p>
+    <p><strong>Selected department:</strong> {{ selected_department }}</p>
     <p><strong>Methodology note:</strong> {{ methodology_note }}</p>
     {% if bias_alert %}
     <div class="alert"><strong>Bias Alert:</strong> {{ alert_message }}</div>
     {% else %}
-    <div class="good"><strong>No critical bias alert.</strong> All configured alerts are within range.</div>
+    <div class="good"><strong>No critical bias alert.</strong> {{ alert_message }}</div>
     {% endif %}
 
     <h2>Fairness Metrics</h2>
@@ -246,7 +280,7 @@ def generate_fairness_report(df, metrics, injected_bias_result, output_dir="repo
         {% endfor %}
     </table>
 
-    <h2>Injected Bias Detection</h2>
+    <h2>Selected Department Peer Score Gap</h2>
     <p>{{ injected_bias_analysis.message }}</p>
 
     <h2>Visualizations</h2>
@@ -290,6 +324,10 @@ def send_alert(report, engine):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run Project Evolve fairness audit")
+    parser.add_argument("--department", default=None, help="Department to use for the peer-score visualization and department-specific bias check")
+    args = parser.parse_args()
+
     load_dotenv()
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
@@ -297,8 +335,9 @@ if __name__ == "__main__":
     )
     engine = create_engine(DATABASE_URL)
     df = load_data(engine)
+    selected_department = resolve_selected_department(df, args.department)
     metrics = compute_fairness_metrics(df)
-    injected_bias = detect_injected_bias(df)
-    report, html_path = generate_fairness_report(df, metrics, injected_bias)
+    department_bias = detect_department_peer_bias(df, selected_department)
+    report, html_path = generate_fairness_report(df, metrics, department_bias, selected_department)
     send_alert(report, engine)
     print(f"HTML report location: {html_path}")

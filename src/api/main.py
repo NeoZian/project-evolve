@@ -1148,8 +1148,32 @@ async def export_audit_pdf(faculty_id: int):
     return Response(
         content=buffer.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=audit_{faculty_id}.pdf"}
+        headers={
+            "Content-Disposition": f"attachment; filename=project_evolve_complete_audit_{faculty_id}.pdf",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "X-Project-Evolve-PDF-Version": "2"
+        }
     )
+
+
+@app.get("/api/fairness/departments")
+async def get_fairness_departments():
+    """Return all departments available for the fairness audit selector."""
+    try:
+        df = pd.read_sql(
+            sa.text("""
+                SELECT DISTINCT department
+                FROM evaluation_results
+                WHERE department IS NOT NULL AND TRIM(department) <> ''
+                ORDER BY department
+            """),
+            engine
+        )
+        departments = [str(value) for value in df["department"].dropna().tolist()]
+        return {"departments": departments}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not load departments: {e}")
 
 
 @app.get("/api/fairness/latest")
@@ -1163,13 +1187,18 @@ async def get_latest_fairness_report():
 
 
 @app.post("/api/fairness/run")
-async def run_fairness_audit():
+async def run_fairness_audit(department: Optional[str] = Query(None)):
     try:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        cmd = ["python", "src/fairness/audit.py"]
+        if department:
+            cmd.extend(["--department", department])
+
         result = subprocess.run(
-            ["python", "src/fairness/audit.py"],
+            cmd,
             capture_output=True,
             text=True,
-            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            cwd=project_root
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"Fairness audit failed: {result.stderr}")
