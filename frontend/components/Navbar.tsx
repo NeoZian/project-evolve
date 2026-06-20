@@ -1,10 +1,13 @@
 'use client';
 import { useTheme } from 'next-themes';
-import { Sun, Moon, BookOpen, Shield, Menu, X } from 'lucide-react';
+import { Sun, Moon, BookOpen, Menu, X, LogOut } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { clearAuthToken } from '@/lib/api';
 
 export default function Navbar() {
+  const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -22,6 +25,20 @@ export default function Navbar() {
   }, []);
 
   if (!mounted) return null;
+
+
+  const handleLogout = async () => {
+    clearAuthToken();
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Logout request failed:', err);
+    } finally {
+      setMobileMenuOpen(false);
+      router.replace('/login');
+      router.refresh();
+    }
+  };
 
   const navLinks = [
     { href: '/', label: 'Dashboard' },
@@ -104,6 +121,18 @@ export default function Navbar() {
               )}
             </button>
 
+            {/* Logout Button */}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="hidden sm:flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-bold text-red-600 transition-all duration-300 hover:scale-105 hover:bg-red-100 active:scale-95 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+              aria-label="Logout"
+              title="Logout"
+            >
+              <LogOut className="h-5 w-5" strokeWidth={2.2} />
+              <span className="hidden xl:inline">Logout</span>
+            </button>
+
             {/* Mobile Menu Toggle */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -133,6 +162,15 @@ export default function Navbar() {
                   {link.label}
                 </Link>
               ))}
+              
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="mt-3 flex w-full items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-600 transition-all duration-200 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+              >
+                <LogOut className="h-4 w-4" strokeWidth={2.2} />
+                Logout
+              </button>
               
               {/* Mobile Blockchain Status */}
               <div className="pt-3 mt-3 border-t border-gray-200 dark:border-white/10">

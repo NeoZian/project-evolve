@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, use } from 'react';
-import { API_BASE, evaluateFaculty, getExplanation, getAudit } from '@/lib/api';
+import { API_BASE, apiFetch, evaluateFaculty, getExplanation, getAudit } from '@/lib/api';
 import XAIExplanation from '@/components/XAIExplanation';
 import BlockchainAudit from '@/components/BlockchainAudit';
 import { ArrowLeft, ExternalLink, Loader2, Sparkles, Download, User, Award, AlertCircle, CheckCircle2, Rocket, FileText, Shield, Brain, Users } from 'lucide-react';
@@ -52,7 +52,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
     setLoadingLime(true);
     
     try {
-      const res = await fetch(`${API_BASE}/explanation/lime/${id}`);
+      const res = await apiFetch(`${API_BASE}/explanation/lime/${id}`, { cache: 'no-store' });
       
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -82,7 +82,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
     setLimeUrl(null);
     
     try {
-      const res = await fetch(`${API_BASE}/explanation/lime/${id}`);
+      const res = await apiFetch(`${API_BASE}/explanation/lime/${id}`, { cache: 'no-store' });
       
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -458,7 +458,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
               <button
                 onClick={async () => {
                   try {
-                    const res = await fetch(`${API_BASE}/export_pdf/${id}`);
+                    const res = await apiFetch(`${API_BASE}/export_pdf/${id}`, { cache: 'no-store' });
                     if (!res.ok) {
                       const errorText = await res.text();
                       throw new Error(`Server error: ${res.status} - ${errorText}`);

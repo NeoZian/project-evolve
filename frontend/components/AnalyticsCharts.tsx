@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -20,9 +20,16 @@ export default function AnalyticsCharts() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/analytics/overview`)
-      .then(res => res.json())
+    apiFetch(`${API_BASE}/api/analytics/overview`, { cache: 'no-store' })
+      .then(res => {
+        if (!res.ok) throw new Error(`Analytics fetch failed: ${res.status}`);
+        return res.json();
+      })
       .then(setData)
+      .catch((err) => {
+        console.error('Analytics fetch error:', err);
+        setData(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 

@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { ShieldAlert, CheckCircle, BarChart3, Play, AlertTriangle, TrendingUp, Users, Scale } from 'lucide-react';
 
@@ -35,7 +35,7 @@ export default function FairnessPage() {
 
   const fetchLatestReport = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/fairness/latest`);
+      const res = await apiFetch(`${API_BASE}/api/fairness/latest`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setReport(data);
@@ -57,7 +57,7 @@ export default function FairnessPage() {
     setRunning(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/fairness/run`, {
+      const res = await apiFetch(`${API_BASE}/api/fairness/run`, {
         method: 'POST',
       });
       if (!res.ok) {

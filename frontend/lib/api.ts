@@ -1,5 +1,5 @@
 // frontend/lib/api.ts
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 export const TOKEN_KEY = 'project_evolve_access_token';
 
 export function getAuthToken() {
@@ -19,7 +19,18 @@ export async function apiFetch(input: string, init: RequestInit = {}) {
   const token = getAuthToken();
   const headers = new Headers(init.headers || {});
   if (token) headers.set('x-access-token', token);
-  return fetch(input, { ...init, headers });
+
+  const res = await fetch(input, { ...init, headers });
+
+  // If the Vercel login cookie exists but the backend token is missing/expired,
+  // send the user back to login so both frontend and Render API are unlocked again.
+  if (res.status === 401 && typeof window !== 'undefined') {
+    clearAuthToken();
+    const next = `${window.location.pathname}${window.location.search}`;
+    window.location.href = `/login?next=${encodeURIComponent(next)}`;
+  }
+
+  return res;
 }
 
 export async function loginBackendWithPassword(password: string) {
