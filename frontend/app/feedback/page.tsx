@@ -1,5 +1,5 @@
 'use client';
-import { API_BASE } from '@/lib/api';
+import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { MessageSquare, Send, CheckCircle, Eye, Loader2, ThumbsUp, ThumbsDown, RefreshCw } from 'lucide-react';
 
@@ -33,7 +33,7 @@ export default function FeedbackPage() {
     setFeedbackError('');
 
     try {
-      const res = await fetch(`${API_BASE}/api/feedback?limit=200`, { cache: 'no-store' });
+      const res = await apiFetch(`${API_BASE}/api/feedback?limit=200`, { cache: 'no-store' });
       if (!res.ok) throw new Error('Could not load feedback entries');
       const data = await res.json();
       setFeedbackEntries(Array.isArray(data.feedback) ? data.feedback : []);
@@ -60,7 +60,7 @@ export default function FeedbackPage() {
     setMessage('');
     
     try {
-      const res = await fetch(`${API_BASE}/api/feedback`, {
+      const res = await apiFetch(`${API_BASE}/api/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
