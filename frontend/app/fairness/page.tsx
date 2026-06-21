@@ -122,6 +122,7 @@ interface FairnessReport {
     count_by_gender: Record<string, number>;
   };
   selected_department?: string;
+  metric_scope?: string;
   available_departments?: string[];
   injected_bias_analysis: {
     bias_detected: boolean;
@@ -154,7 +155,10 @@ export default function FairnessPage() {
 
     const finalList = cleaned.length > 0 ? cleaned : FALLBACK_DEPARTMENTS;
     setDepartments(finalList);
-    setSelectedDepartment((current) => current || finalList[0] || '');
+    setSelectedDepartment((current) => {
+      if (!current) return finalList[0] || '';
+      return finalList.some((department) => department === current) ? current : finalList[0] || '';
+    });
   };
 
   const fetchDepartments = async () => {
@@ -199,6 +203,7 @@ export default function FairnessPage() {
       const params = selectedDepartment ? `?department=${encodeURIComponent(selectedDepartment)}` : '';
       const res = await apiFetch(`${API_BASE}/api/fairness/run${params}`, {
         method: 'POST',
+        cache: 'no-store',
       });
       if (!res.ok) {
         const errText = await res.text();
@@ -303,6 +308,7 @@ export default function FairnessPage() {
               <Scale className="w-4 h-4" strokeWidth={2} />
               Last updated: {new Date(report.timestamp).toLocaleString()}
               {report.selected_department && ` • Department view: ${report.selected_department}`}
+              {report.metric_scope && ` • ${report.metric_scope}`}
             </div>
           )}
         </div>

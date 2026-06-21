@@ -1239,25 +1239,23 @@ def _load_departments_from_csv():
 
 @app.get("/api/fairness/departments")
 async def get_fairness_departments():
-    """Return departments for the fairness audit selector.
-
-    The fairness graph is generated from the bundled ``evaluation_results``
-    demo data when the live database is unavailable. The previous version tried
-    a live database inspection first, which can hang on free Render/Supabase
-    deployments and leave the UI stuck at "Loading departments...". This reads
-    the bundled SQL dump first, so the selector uses the same department source
-    that produced the original fairness visualization.
-    """
+    """Return departments from the same data source used by the audit run."""
     sources_checked = []
 
-    dump_departments = _load_departments_from_sql_dump()
-    sources_checked.append("evolve_db_dump.sql")
-    if dump_departments:
-        return {
-            "departments": dump_departments,
-            "source": "sql_dump_fallback",
-            "sources_checked": sources_checked,
-        }
+    try:
+        from src.fairness.audit import load_data as load_fairness_data, get_available_departments
+        df = load_fairness_data(engine)
+        departments = get_available_departments(df)
+        sources_checked.append("evaluation_results/live_or_sql_fallback")
+        if departments:
+            return {
+                "departments": departments,
+                "source": "fairness_data_source",
+                "sources_checked": sources_checked,
+            }
+    except Exception as e:
+        print(f"Fairness data department load failed: {e}")
+        sources_checked.append("evaluation_results_failed")
 
     report_departments = _load_departments_from_reports()
     sources_checked.append("reports")
