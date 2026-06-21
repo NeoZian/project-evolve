@@ -27,6 +27,57 @@ SCORE_THRESHOLD = 4.0
 DEFAULT_DEPARTMENT_PATTERN = "CS|Engineering|Computer Science"
 
 
+def _project_root():
+    return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+
+def _load_evaluation_results_from_sql_dump():
+    """Load the bundled evaluation_results demo data used by the original graph."""
+    dump_path = os.path.join(_project_root(), "evolve_db_dump.sql")
+    if not os.path.exists(dump_path):
+        return pd.DataFrame()
+
+    header = None
+    rows = []
+    reading = False
+    with open(dump_path, "r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\n")
+            if line.startswith("COPY public.evaluation_results "):
+                columns_part = line.split("(", 1)[1].rsplit(")", 1)[0]
+                header = [column.strip() for column in columns_part.split(",")]
+                reading = True
+                continue
+            if reading:
+                if line == "\\.":
+                    break
+                values = line.split("\t")
+                if header and len(values) == len(header):
+                    rows.append(values)
+
+    if not header or not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows, columns=header)
+    needed = [
+        "faculty_id", "faculty_name", "department", "gender",
+        "experience_years", "final_evaluation_score", "peer_score",
+        "student_feedback_rating", "nlp_sentiment_score", "avg_grade"
+    ]
+    for column in needed:
+        if column not in df.columns:
+            df[column] = np.nan
+    numeric_columns = [
+        "faculty_id", "experience_years", "final_evaluation_score",
+        "peer_score", "student_feedback_rating", "nlp_sentiment_score", "avg_grade"
+    ]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column].replace("\\N", np.nan), errors="coerce")
+    df["department"] = df["department"].replace("\\N", "Unknown").fillna("Unknown")
+    df["gender"] = df["gender"].replace("\\N", "Unknown").fillna("Unknown")
+    return df[needed]
+
+
 def convert_to_serializable(obj):
     if isinstance(obj, (np.integer, np.int64)):
         return int(obj)
@@ -44,8 +95,8 @@ def convert_to_serializable(obj):
 
 
 def load_data(engine):
-    """Load evaluation results and protected/group attributes from PostgreSQL."""
-    df = pd.read_sql("""
+    """Load fairness data from PostgreSQL, with bundled SQL dump fallback."""
+    query = """
         SELECT
             e.faculty_id,
             e.faculty_name,
@@ -58,9 +109,20 @@ def load_data(engine):
             e.nlp_sentiment_score,
             e.avg_grade
         FROM evaluation_results e
-    """, engine)
-    df["department"] = df["department"].fillna("Unknown")
-    return df
+    """
+    try:
+        df = pd.read_sql(query, engine)
+        if not df.empty:
+            df["department"] = df["department"].fillna("Unknown")
+            df["gender"] = df["gender"].fillna("Unknown")
+            return df
+    except Exception as e:
+        print(f"Database fairness data load failed, using bundled dump fallback: {e}")
+
+    fallback = _load_evaluation_results_from_sql_dump()
+    if fallback.empty:
+        raise RuntimeError("No fairness data available from database or bundled SQL dump.")
+    return fallback
 
 
 def resolve_selected_department(df, selected_department=None):
@@ -186,11 +248,11 @@ def generate_fairness_report(df, metrics, department_bias_result, selected_depar
     plt.subplot(1, 2, 2)
     if not dept_df.empty:
         sns.boxplot(data=dept_df, x="gender", y="peer_score", hue="gender", palette="Set1", legend=False)
-        plt.title(f"Peer Score in {selected_department} Department")
+        plt.title(f"Peer Score in {selected_department}")
         plt.ylabel("Peer Score")
     else:
         plt.text(0.5, 0.5, f"No faculty data for {selected_department}", ha="center", va="center")
-        plt.title(f"Peer Score in {selected_department} Department")
+        plt.title(f"Peer Score in {selected_department}")
 
     plt.tight_layout()
     safe_department = "".join(c if c.isalnum() else "_" for c in str(selected_department)).strip("_") or "department"

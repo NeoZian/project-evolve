@@ -1157,23 +1157,124 @@ async def export_audit_pdf(faculty_id: int):
     )
 
 
+def _normalise_department_list(values):
+    """Clean and sort department names for the fairness selector."""
+    cleaned = []
+    seen = set()
+    for value in values or []:
+        if value is None:
+            continue
+        department = str(value).strip()
+        if not department or department.lower() in {"nan", "none", "null", "\\n"} or department == "\\N":
+            continue
+        key = department.lower()
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(department)
+    return sorted(cleaned, key=lambda item: item.lower())
+
+
+def _load_departments_from_reports():
+    files = glob.glob(os.path.join("reports", "fairness_report_*.json"))
+    for path in sorted(files, key=os.path.getctime, reverse=True):
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            departments = _normalise_department_list(data.get("available_departments", []))
+            if departments:
+                return departments
+            selected = data.get("selected_department")
+            if selected:
+                return _normalise_department_list([selected])
+        except Exception:
+            continue
+    return []
+
+
+def _load_departments_from_sql_dump():
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    dump_path = os.path.join(project_root, "evolve_db_dump.sql")
+    if not os.path.exists(dump_path):
+        return []
+    try:
+        header = None
+        dept_index = None
+        values = []
+        reading = False
+        with open(dump_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                line = raw_line.rstrip("\n")
+                if line.startswith("COPY public.evaluation_results "):
+                    columns_part = line.split("(", 1)[1].rsplit(")", 1)[0]
+                    header = [column.strip() for column in columns_part.split(",")]
+                    dept_index = header.index("department") if "department" in header else None
+                    reading = True
+                    continue
+                if reading:
+                    if line == "\\.":
+                        break
+                    if dept_index is None:
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) > dept_index:
+                        values.append(parts[dept_index])
+        return _normalise_department_list(values)
+    except Exception as e:
+        print(f"SQL dump department fallback failed: {e}")
+        return []
+
+
+def _load_departments_from_csv():
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    csv_path = os.path.join(project_root, "data", "raw", "ratemyprofessor_sample.csv")
+    if not os.path.exists(csv_path):
+        return []
+    try:
+        df = pd.read_csv(csv_path, usecols=["department_name"])
+        return _normalise_department_list(df["department_name"].dropna().tolist())
+    except Exception as e:
+        print(f"CSV department fallback failed: {e}")
+        return []
+
+
 @app.get("/api/fairness/departments")
 async def get_fairness_departments():
-    """Return all departments available for the fairness audit selector."""
-    try:
-        df = pd.read_sql(
-            sa.text("""
-                SELECT DISTINCT department
-                FROM evaluation_results
-                WHERE department IS NOT NULL AND TRIM(department) <> ''
-                ORDER BY department
-            """),
-            engine
-        )
-        departments = [str(value) for value in df["department"].dropna().tolist()]
-        return {"departments": departments}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not load departments: {e}")
+    """Return departments for the fairness audit selector.
+
+    The fairness graph is generated from the bundled ``evaluation_results``
+    demo data when the live database is unavailable. The previous version tried
+    a live database inspection first, which can hang on free Render/Supabase
+    deployments and leave the UI stuck at "Loading departments...". This reads
+    the bundled SQL dump first, so the selector uses the same department source
+    that produced the original fairness visualization.
+    """
+    sources_checked = []
+
+    dump_departments = _load_departments_from_sql_dump()
+    sources_checked.append("evolve_db_dump.sql")
+    if dump_departments:
+        return {
+            "departments": dump_departments,
+            "source": "sql_dump_fallback",
+            "sources_checked": sources_checked,
+        }
+
+    report_departments = _load_departments_from_reports()
+    sources_checked.append("reports")
+    if report_departments:
+        return {
+            "departments": report_departments,
+            "source": "reports",
+            "sources_checked": sources_checked,
+        }
+
+    csv_departments = _load_departments_from_csv()
+    sources_checked.append("data/raw/ratemyprofessor_sample.csv")
+    return {
+        "departments": csv_departments,
+        "source": "csv_fallback",
+        "sources_checked": sources_checked,
+    }
 
 
 @app.get("/api/fairness/latest")

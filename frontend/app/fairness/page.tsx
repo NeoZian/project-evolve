@@ -3,6 +3,110 @@ import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { ShieldAlert, CheckCircle, BarChart3, Play, AlertTriangle, TrendingUp, Users, Scale } from 'lucide-react';
 
+const FALLBACK_DEPARTMENTS = [
+  "Accounting & Finance department",
+  "Accounting department",
+  "African Studies department",
+  "Agriculture department",
+  "Anatomy department",
+  "Anthropology department",
+  "Architecture department",
+  "Art department",
+  "Art History department",
+  "Asian American Studies department",
+  "ASL & Deaf Studies department",
+  "Astronomy department",
+  "Automotive Technology department",
+  "Aviation department",
+  "Biochemistry department",
+  "Biology department",
+  "Business department",
+  "Chemistry & Biochemistry department",
+  "Chemistry department",
+  "Chicano Studies department",
+  "Childrens Literature department",
+  "Civil Engineering department",
+  "Classics department",
+  "Communication department",
+  "Comparative Literature department",
+  "Computer Engineering department",
+  "Computer Information Systems department",
+  "Computer Science department",
+  "Criminal Justice department",
+  "Culinary Arts department",
+  "Design department",
+  "Earth Science department",
+  "Economics department",
+  "Education department",
+  "Electrical Engineering department",
+  "Electrical Technology department",
+  "Elementary Education department",
+  "Engineering department",
+  "English department",
+  "Environment department",
+  "Ethnic Studies department",
+  "Family & Child Studies department",
+  "Family & Consumer Science department",
+  "Film department",
+  "Finance department",
+  "Fine Arts department",
+  "Geography department",
+  "Geology department",
+  "German department",
+  "Graphic Arts department",
+  "Health Science department",
+  "Hispanic Studies department",
+  "History department",
+  "Honors department",
+  "Hospitality department",
+  "Humanities department",
+  "Interaction Design & Art department",
+  "International Studies department",
+  "Italian department",
+  "Journalism department",
+  "Kinesiology department",
+  "Languages department",
+  "Law department",
+  "Library Science department",
+  "Linguistics department",
+  "Literature department",
+  "MacRomolecular Science & Eng department",
+  "Management department",
+  "Marketing department",
+  "Materials Science department",
+  "Mathematics department",
+  "Mechanical Engineering department",
+  "Medicine department",
+  "Music department",
+  "Natural Sciences department",
+  "Not Specified department",
+  "Nursing department",
+  "Nutrition department",
+  "Pharmacology department",
+  "Pharmacy department",
+  "Philosophy department",
+  "Physical Ed department",
+  "Physical Education department",
+  "Physics department",
+  "Political Science department",
+  "Psychology department",
+  "Public Health department",
+  "Religion department",
+  "Religious Studies department",
+  "Russian department",
+  "Science department",
+  "Social Science department",
+  "Sociology department",
+  "Spanish department",
+  "Speech department",
+  "Statistics department",
+  "Theater department",
+  "Theology department",
+  "Visual Arts department",
+  "Women\\\\'s Studies department",
+  "Writing department"
+];
+
 interface FairnessReport {
   timestamp: string;
   threshold: number;
@@ -36,8 +140,22 @@ export default function FairnessPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [departments, setDepartments] = useState<string[]>([]);
-  const [selectedDepartment, setSelectedDepartment] = useState('');
+  const [departments, setDepartments] = useState<string[]>(FALLBACK_DEPARTMENTS);
+  const [selectedDepartment, setSelectedDepartment] = useState(FALLBACK_DEPARTMENTS[0] || '');
+
+  const applyDepartmentList = (list: string[]) => {
+    const cleaned = Array.from(
+      new Set(
+        list
+          .map((department) => String(department || '').trim())
+          .filter((department) => department.length > 0)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
+    const finalList = cleaned.length > 0 ? cleaned : FALLBACK_DEPARTMENTS;
+    setDepartments(finalList);
+    setSelectedDepartment((current) => current || finalList[0] || '');
+  };
 
   const fetchDepartments = async () => {
     try {
@@ -45,8 +163,7 @@ export default function FairnessPage() {
       if (!res.ok) return;
       const data = await res.json();
       const list = Array.isArray(data.departments) ? data.departments : [];
-      setDepartments(list);
-      setSelectedDepartment((current) => current || list[0] || '');
+      applyDepartmentList(list);
     } catch (err) {
       console.error('Could not load departments', err);
     }
@@ -60,9 +177,6 @@ export default function FairnessPage() {
         setReport(data);
         if (data?.selected_department) {
           setSelectedDepartment(data.selected_department);
-        }
-        if (Array.isArray(data?.available_departments) && data.available_departments.length > 0) {
-          setDepartments(data.available_departments);
         }
         setError(null);
       } else if (res.status === 404) {
