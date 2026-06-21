@@ -3,109 +3,7 @@ import { API_BASE, apiFetch } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { ShieldAlert, CheckCircle, BarChart3, Play, AlertTriangle, TrendingUp, Users, Scale } from 'lucide-react';
 
-const FALLBACK_DEPARTMENTS = [
-  "Accounting & Finance department",
-  "Accounting department",
-  "African Studies department",
-  "Agriculture department",
-  "Anatomy department",
-  "Anthropology department",
-  "Architecture department",
-  "Art department",
-  "Art History department",
-  "Asian American Studies department",
-  "ASL & Deaf Studies department",
-  "Astronomy department",
-  "Automotive Technology department",
-  "Aviation department",
-  "Biochemistry department",
-  "Biology department",
-  "Business department",
-  "Chemistry & Biochemistry department",
-  "Chemistry department",
-  "Chicano Studies department",
-  "Childrens Literature department",
-  "Civil Engineering department",
-  "Classics department",
-  "Communication department",
-  "Comparative Literature department",
-  "Computer Engineering department",
-  "Computer Information Systems department",
-  "Computer Science department",
-  "Criminal Justice department",
-  "Culinary Arts department",
-  "Design department",
-  "Earth Science department",
-  "Economics department",
-  "Education department",
-  "Electrical Engineering department",
-  "Electrical Technology department",
-  "Elementary Education department",
-  "Engineering department",
-  "English department",
-  "Environment department",
-  "Ethnic Studies department",
-  "Family & Child Studies department",
-  "Family & Consumer Science department",
-  "Film department",
-  "Finance department",
-  "Fine Arts department",
-  "Geography department",
-  "Geology department",
-  "German department",
-  "Graphic Arts department",
-  "Health Science department",
-  "Hispanic Studies department",
-  "History department",
-  "Honors department",
-  "Hospitality department",
-  "Humanities department",
-  "Interaction Design & Art department",
-  "International Studies department",
-  "Italian department",
-  "Journalism department",
-  "Kinesiology department",
-  "Languages department",
-  "Law department",
-  "Library Science department",
-  "Linguistics department",
-  "Literature department",
-  "MacRomolecular Science & Eng department",
-  "Management department",
-  "Marketing department",
-  "Materials Science department",
-  "Mathematics department",
-  "Mechanical Engineering department",
-  "Medicine department",
-  "Music department",
-  "Natural Sciences department",
-  "Not Specified department",
-  "Nursing department",
-  "Nutrition department",
-  "Pharmacology department",
-  "Pharmacy department",
-  "Philosophy department",
-  "Physical Ed department",
-  "Physical Education department",
-  "Physics department",
-  "Political Science department",
-  "Psychology department",
-  "Public Health department",
-  "Religion department",
-  "Religious Studies department",
-  "Russian department",
-  "Science department",
-  "Social Science department",
-  "Sociology department",
-  "Spanish department",
-  "Speech department",
-  "Statistics department",
-  "Theater department",
-  "Theology department",
-  "Visual Arts department",
-  "Women\\\\'s Studies department",
-  "Writing department"
-];
+const FALLBACK_DEPARTMENTS = ["Overall / All Departments"];
 
 interface FairnessReport {
   timestamp: string;
@@ -153,7 +51,10 @@ export default function FairnessPage() {
       )
     ).sort((a, b) => a.localeCompare(b));
 
-    const finalList = cleaned.length > 0 ? cleaned : FALLBACK_DEPARTMENTS;
+    const hasOverall = cleaned.some((department) => department.toLowerCase() === 'overall / all departments');
+    const finalList = cleaned.length > 0
+      ? (hasOverall ? cleaned : ['Overall / All Departments', ...cleaned])
+      : FALLBACK_DEPARTMENTS;
     setDepartments(finalList);
     setSelectedDepartment((current) => {
       if (!current) return finalList[0] || '';
@@ -255,7 +156,7 @@ export default function FairnessPage() {
                   Fairness & Bias Audit
                 </h1>
                 <p className="text-lg text-gray-600 dark:text-gray-400 mt-2 font-medium">
-                  Department-specific analysis of algorithmic fairness across demographic groups
+                  Overall or department-specific analysis of algorithmic fairness across demographic groups
                 </p>
               </div>
             </div>
@@ -263,7 +164,7 @@ export default function FairnessPage() {
             {/* Department Selector + Run Audit Button */}
             <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
               <label className="flex flex-col gap-2 text-sm font-bold text-gray-700 dark:text-gray-300">
-                Select Department
+                Audit Scope
                 <select
                   value={selectedDepartment}
                   onChange={(event) => setSelectedDepartment(event.target.value)}

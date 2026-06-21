@@ -1174,6 +1174,9 @@ def _normalise_department_list(values):
     return sorted(cleaned, key=lambda item: item.lower())
 
 
+FAIRNESS_OVERALL_LABEL = "Overall / All Departments"
+
+
 def _load_departments_from_reports():
     files = glob.glob(os.path.join("reports", "fairness_report_*.json"))
     for path in sorted(files, key=os.path.getctime, reverse=True):
@@ -1245,7 +1248,7 @@ async def get_fairness_departments():
     try:
         from src.fairness.audit import load_data as load_fairness_data, get_available_departments
         df = load_fairness_data(engine)
-        departments = get_available_departments(df)
+        departments = get_available_departments(df, include_overall=True, require_fairness_ready=True)
         sources_checked.append("evaluation_results/live_or_sql_fallback")
         if departments:
             return {
@@ -1261,7 +1264,7 @@ async def get_fairness_departments():
     sources_checked.append("reports")
     if report_departments:
         return {
-            "departments": report_departments,
+            "departments": _normalise_department_list([FAIRNESS_OVERALL_LABEL] + report_departments),
             "source": "reports",
             "sources_checked": sources_checked,
         }
@@ -1269,7 +1272,7 @@ async def get_fairness_departments():
     csv_departments = _load_departments_from_csv()
     sources_checked.append("data/raw/ratemyprofessor_sample.csv")
     return {
-        "departments": csv_departments,
+        "departments": _normalise_department_list([FAIRNESS_OVERALL_LABEL] + csv_departments),
         "source": "csv_fallback",
         "sources_checked": sources_checked,
     }
@@ -1304,12 +1307,15 @@ async def run_fairness_audit(department: Optional[str] = Query(None)):
             detect_department_peer_bias,
             generate_fairness_report,
             send_alert,
+            is_overall_department,
+            _department_frame,
         )
 
         df = load_fairness_data(engine)
         selected_department = resolve_selected_department(df, department)
-        selected_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
-        metrics_source = selected_df if not selected_df.empty else df
+        metrics_source = df if is_overall_department(selected_department) else _department_frame(df, selected_department)
+        if metrics_source.empty:
+            raise HTTPException(status_code=404, detail=f"No usable fairness data found for department: {department}")
 
         metrics = compute_fairness_metrics(metrics_source)
         department_bias = detect_department_peer_bias(df, selected_department)

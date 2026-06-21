@@ -26,6 +26,10 @@ except Exception:  # Keep deployed demo working even when fairlearn is unavailab
 
 THRESHOLD = 0.1
 SCORE_THRESHOLD = 4.0
+OVERALL_DEPARTMENT_VALUE = "__overall__"
+OVERALL_DEPARTMENT_LABEL = "Overall / All Departments"
+MIN_DEPARTMENT_RECORDS = 50
+
 
 
 def _project_root():
@@ -153,41 +157,87 @@ def load_data(engine):
     return fallback
 
 
-def get_available_departments(df):
+def get_available_departments(df, include_overall=False, require_fairness_ready=True):
+    """Return only departments that have usable fairness data.
+
+    This prevents the frontend selector from showing departments that exist in
+    older reports/raw CSV fallback lists but do not have enough rows to generate
+    a meaningful department-level audit. A department is considered usable when
+    it has at least MIN_DEPARTMENT_RECORDS rows with a valid score and gender.
+    """
+    if df is None or df.empty or "department" not in df.columns:
+        return [OVERALL_DEPARTMENT_LABEL] if include_overall else []
+
+    scoped = df.copy()
+    scoped["department"] = scoped["department"].astype(str).str.strip()
+    scoped = scoped[
+        scoped["department"].notna()
+        & (~scoped["department"].str.lower().isin(["", "nan", "none", "null", "\\n", "\\N".lower()]))
+    ]
+
+    if require_fairness_ready:
+        scoped["final_evaluation_score"] = pd.to_numeric(scoped.get("final_evaluation_score"), errors="coerce")
+        scoped["gender"] = scoped.get("gender", pd.Series(index=scoped.index, dtype=str)).astype(str).str.strip()
+        scoped = scoped.dropna(subset=["final_evaluation_score"])
+        scoped = scoped[~scoped["gender"].str.lower().isin(["", "nan", "none", "null", "unknown", "\\n", "\\n"])]
+
     departments = []
     seen = set()
-    for value in df.get("department", pd.Series(dtype=str)).dropna().tolist():
-        department = str(value).strip()
-        if not department or department == "\\N" or department.lower() in {"nan", "none", "null"}:
+    for department, group in scoped.groupby("department", dropna=True):
+        department = str(department).strip()
+        if not department or department.lower() in {"nan", "none", "null", "unknown"}:
+            continue
+        if require_fairness_ready and len(group) < MIN_DEPARTMENT_RECORDS:
             continue
         key = department.lower()
         if key not in seen:
             seen.add(key)
             departments.append(department)
-    return sorted(departments, key=lambda item: item.lower())
+
+    departments = sorted(departments, key=lambda item: item.lower())
+    if include_overall:
+        return [OVERALL_DEPARTMENT_LABEL] + departments
+    return departments
+
+
+def is_overall_department(selected_department=None):
+    if selected_department is None:
+        return True
+    value = str(selected_department).strip().lower()
+    return value in {"", "all", "overall", "overall / all departments", "all departments", OVERALL_DEPARTMENT_VALUE}
 
 
 def resolve_selected_department(df, selected_department=None):
-    """Resolve query text to one valid department. No hardcoded CS fallback."""
-    departments = get_available_departments(df)
-    if selected_department:
-        wanted = str(selected_department).strip().lower()
-        for department in departments:
-            if department.lower() == wanted:
-                return department
-        for department in departments:
-            if wanted in department.lower() or department.lower() in wanted:
-                return department
-    return departments[0] if departments else "Unknown"
+    """Resolve query text to Overall or one valid department. No CS fallback."""
+    if is_overall_department(selected_department):
+        return OVERALL_DEPARTMENT_LABEL
+
+    departments = get_available_departments(df, include_overall=False, require_fairness_ready=True)
+    wanted = str(selected_department).strip().lower()
+    for department in departments:
+        if department.lower() == wanted:
+            return department
+
+    # Only use a close match among valid fairness-ready departments.
+    for department in departments:
+        if wanted in department.lower() or department.lower() in wanted:
+            return department
+
+    # Unknown/invalid departments fall back to Overall instead of a random first
+    # department, so the audit always returns a valid meaningful report.
+    return OVERALL_DEPARTMENT_LABEL
 
 
 def _department_frame(df, selected_department):
+    if is_overall_department(selected_department):
+        return df.copy()
     return df[df["department"].astype(str).str.lower() == str(selected_department).lower()].copy()
 
 
 def detect_department_peer_bias(df, selected_department):
-    """Detect peer-review score gaps by gender inside the selected department."""
+    """Detect peer-review score gaps by gender inside selected scope."""
     dept_df = _department_frame(df, selected_department)
+    scope_label = selected_department if not is_overall_department(selected_department) else OVERALL_DEPARTMENT_LABEL
     group_means = dept_df.groupby("gender")["peer_score"].mean().dropna().to_dict()
 
     female_mean = group_means.get("Female")
@@ -196,11 +246,11 @@ def detect_department_peer_bias(df, selected_department):
         return {
             "bias_detected": False,
             "reason": "Insufficient data",
-            "selected_department": selected_department,
+            "selected_department": scope_label,
             "target_group_mean_peer": None if female_mean is None else round(float(female_mean), 3),
             "control_group_mean_peer": None if male_mean is None else round(float(male_mean), 3),
             "difference": None,
-            "message": f"Insufficient male/female peer-review data to detect department-specific peer-score bias in {selected_department}."
+            "message": f"Insufficient male/female peer-review data to detect peer-score bias in {scope_label}."
         }
 
     diff = float(male_mean - female_mean)
@@ -209,14 +259,14 @@ def detect_department_peer_bias(df, selected_department):
 
     return {
         "bias_detected": bias_detected,
-        "selected_department": selected_department,
+        "selected_department": scope_label,
         "target_group_mean_peer": round(float(female_mean), 3),
         "control_group_mean_peer": round(float(male_mean), 3),
         "difference": round(diff, 3),
         "message": (
-            f"Possible peer-review score gap in {selected_department}: {direction} by {abs(diff):.2f}."
+            f"Possible peer-review score gap in {scope_label}: {direction} by {abs(diff):.2f}."
             if bias_detected else
-            f"No significant peer-review score gap detected in {selected_department}."
+            f"No significant peer-review score gap detected in {scope_label}."
         )
     }
 
@@ -280,36 +330,56 @@ def compute_fairness_metrics(df):
 
 
 def _make_selected_department_plot(dept_df, selected_department, output_dir, timestamp):
-    safe_department = "".join(c if c.isalnum() else "_" for c in str(selected_department)).strip("_") or "department"
+    """Create a boxplot-style visualization matching the original graph style.
+
+    For Overall, it uses all rows. For a selected department, it uses only that
+    department's rows but keeps the same two-panel boxplot style as the previous
+    dashboard graph.
+    """
+    scope_label = selected_department if not is_overall_department(selected_department) else OVERALL_DEPARTMENT_LABEL
+    safe_department = "overall" if is_overall_department(selected_department) else "".join(c if c.isalnum() else "_" for c in str(selected_department)).strip("_") or "department"
     plot_path = os.path.join(output_dir, f"fairness_plots_{safe_department}_{timestamp}.png")
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"Fairness Audit for {selected_department}", fontsize=15, fontweight="bold")
 
     if dept_df.empty:
         for ax in axes:
-            ax.text(0.5, 0.5, f"No data found for {selected_department}", ha="center", va="center")
+            ax.text(0.5, 0.5, f"No usable fairness data for {scope_label}", ha="center", va="center")
             ax.set_axis_off()
     else:
-        summary = dept_df.groupby("gender").agg(
-            final_score=("final_evaluation_score", "mean"),
-            peer_score=("peer_score", "mean"),
-            count=("faculty_id", "count"),
-        ).reset_index()
+        plot_df = dept_df.copy()
+        plot_df["final_evaluation_score"] = pd.to_numeric(plot_df["final_evaluation_score"], errors="coerce")
+        plot_df["peer_score"] = pd.to_numeric(plot_df["peer_score"], errors="coerce")
+        plot_df["gender"] = plot_df["gender"].astype(str)
+        gender_order = [g for g in ["Female", "Male"] if g in set(plot_df["gender"])]
+        gender_order += sorted([g for g in set(plot_df["gender"]) if g not in gender_order and g not in {"", "nan", "None"}])
 
-        axes[0].bar(summary["gender"], summary["final_score"])
-        axes[0].set_title(f"Average Final Score by Gender\n{selected_department}")
-        axes[0].set_ylabel("Final Evaluation Score")
+        def box_values(column):
+            labels, values = [], []
+            for gender in gender_order:
+                vals = plot_df.loc[plot_df["gender"] == gender, column].dropna().astype(float).tolist()
+                if vals:
+                    labels.append(gender)
+                    values.append(vals)
+            return labels, values
+
+        labels, values = box_values("final_evaluation_score")
+        if values:
+            axes[0].boxplot(values, labels=labels, patch_artist=True, showmeans=False)
+        else:
+            axes[0].text(0.5, 0.5, "No final score data", ha="center", va="center")
+        axes[0].set_title("Final Score Distribution by Gender" if is_overall_department(selected_department) else f"Final Score Distribution by Gender\n{scope_label}")
+        axes[0].set_ylabel("Evaluation Score")
         axes[0].set_ylim(0, 5)
-        for idx, row in summary.iterrows():
-            axes[0].text(idx, row["final_score"] + 0.05, f"{row['final_score']:.2f}\nn={int(row['count'])}", ha="center", fontsize=9)
 
-        axes[1].bar(summary["gender"], summary["peer_score"])
-        axes[1].set_title(f"Average Peer Score by Gender\n{selected_department}")
+        labels, values = box_values("peer_score")
+        if values:
+            axes[1].boxplot(values, labels=labels, patch_artist=True, showmeans=False)
+        else:
+            axes[1].text(0.5, 0.5, "No peer score data", ha="center", va="center")
+        axes[1].set_title("Peer Score by Gender - Overall" if is_overall_department(selected_department) else f"Peer Score by Gender\n{scope_label}")
         axes[1].set_ylabel("Peer Score")
         axes[1].set_ylim(0, 5)
-        for idx, row in summary.iterrows():
-            axes[1].text(idx, row["peer_score"] + 0.05, f"{row['peer_score']:.2f}\nn={int(row['count'])}", ha="center", fontsize=9)
 
     plt.tight_layout()
     plt.savefig(plot_path, dpi=140, bbox_inches="tight")
@@ -320,6 +390,7 @@ def _make_selected_department_plot(dept_df, selected_department, output_dir, tim
 def generate_fairness_report(df, metrics, department_bias_result, selected_department, output_dir="reports"):
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    scope_label = selected_department if not is_overall_department(selected_department) else OVERALL_DEPARTMENT_LABEL
     dept_df = _department_frame(df, selected_department)
     plot_path = _make_selected_department_plot(dept_df, selected_department, output_dir, timestamp)
 
@@ -328,7 +399,7 @@ def generate_fairness_report(df, metrics, department_bias_result, selected_depar
     if abs(_safe_float(metrics.get("demographic_parity_difference"))) > THRESHOLD:
         bias_alert = True
         alert_messages.append(
-            f"Demographic parity difference ({metrics['demographic_parity_difference']}) exceeds threshold {THRESHOLD} in {selected_department}."
+            f"Demographic parity difference ({metrics['demographic_parity_difference']}) exceeds threshold {THRESHOLD} in {scope_label}."
         )
     if department_bias_result.get("bias_detected", False):
         bias_alert = True
@@ -340,18 +411,18 @@ def generate_fairness_report(df, metrics, department_bias_result, selected_depar
         "timestamp": timestamp,
         "threshold": THRESHOLD,
         "score_threshold": SCORE_THRESHOLD,
-        "selected_department": selected_department,
-        "metric_scope": f"Selected department only: {selected_department}",
-        "available_departments": get_available_departments(df),
+        "selected_department": scope_label,
+        "metric_scope": "All departments" if is_overall_department(selected_department) else f"Selected department only: {scope_label}",
+        "available_departments": get_available_departments(df, include_overall=True, require_fairness_ready=True),
         "bias_alert": bias_alert,
-        "alert_message": " ".join(alert_messages) if alert_messages else f"No critical bias alert for the selected department: {selected_department}.",
+        "alert_message": " ".join(alert_messages) if alert_messages else f"No critical bias alert for the selected scope: {scope_label}.",
         "fairness_metrics": metrics,
         "injected_bias_analysis": department_bias_result,
         "department_peer_by_gender": department_peer_by_gender,
         "plot_path": plot_path,
         "methodology_note": (
-            "The selected department controls this report. Metrics, gender counts, peer-score gaps, "
-            "and the visualization are all calculated only from rows belonging to the selected department."
+            "The selected option controls this report. If Overall is selected, metrics and plots use all valid rows. "
+            "If a department is selected, metrics, counts, peer-score gaps, and visualization use only that department's rows."
         ),
     }
     report = convert_to_serializable(report)
