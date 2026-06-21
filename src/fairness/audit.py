@@ -369,9 +369,19 @@ def _make_selected_department_plot(dept_df, selected_department, output_dir, tim
                     values.append(vals)
             return labels, values
 
+        def draw_boxplot(ax, values, labels):
+            # Matplotlib 3.9+ renamed the boxplot argument from `labels` to
+            # `tick_labels`. Render may use the newer version, while local
+            # machines may use older versions. This keeps the fairness graph
+            # compatible in both environments.
+            try:
+                return ax.boxplot(values, tick_labels=labels, patch_artist=True, showmeans=False)
+            except TypeError:
+                return ax.boxplot(values, labels=labels, patch_artist=True, showmeans=False)
+
         labels, values = box_values("final_evaluation_score")
         if values:
-            axes[0].boxplot(values, labels=labels, patch_artist=True, showmeans=False)
+            draw_boxplot(axes[0], values, labels)
         else:
             axes[0].text(0.5, 0.5, "No final score data", ha="center", va="center")
         axes[0].set_title("Final Score Distribution by Gender" if is_overall_department(selected_department) else f"Final Score Distribution by Gender\n{scope_label}")
@@ -380,7 +390,7 @@ def _make_selected_department_plot(dept_df, selected_department, output_dir, tim
 
         labels, values = box_values("peer_score")
         if values:
-            axes[1].boxplot(values, labels=labels, patch_artist=True, showmeans=False)
+            draw_boxplot(axes[1], values, labels)
         else:
             axes[1].text(0.5, 0.5, "No peer score data", ha="center", va="center")
         axes[1].set_title("Peer Score by Gender - Overall" if is_overall_department(selected_department) else f"Peer Score by Gender\n{scope_label}")
