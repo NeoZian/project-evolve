@@ -250,7 +250,7 @@ export default function FairnessPage() {
                   Fairness & Bias Audit
                 </h1>
                 <p className="text-lg text-gray-600 dark:text-gray-400 mt-2 font-medium">
-                  Comprehensive analysis of algorithmic fairness across demographic groups
+                  Department-specific analysis of algorithmic fairness across demographic groups
                 </p>
               </div>
             </div>
@@ -487,7 +487,7 @@ export default function FairnessPage() {
             <div className="mb-10">
               <div className="flex items-center gap-3 mb-6">
                 <Users className="w-6 h-6 text-purple-600 dark:text-purple-400" strokeWidth={2} />
-                <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Mean Scores by Gender</h2>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Mean Scores by Gender in Selected Department</h2>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
@@ -600,8 +600,8 @@ export default function FairnessPage() {
                 
                 <div className="bg-white dark:bg-[#12121a] rounded-3xl p-8 border-2 border-indigo-200/60 dark:border-indigo-800/30 shadow-lg overflow-hidden">
                   <img 
-                    src={`${API_BASE}/reports/${report.plot_path.split('/').pop()}`} 
-                    alt="Fairness visualization charts" 
+                    src={`${API_BASE}/reports/${report.plot_path.split('/').pop()}?v=${encodeURIComponent(`${report.timestamp}-${report.selected_department || selectedDepartment}`)}`} 
+                    alt={`Fairness visualization charts for ${report.selected_department || selectedDepartment}`} 
                     className="w-full rounded-2xl border border-gray-100 dark:border-white/5 shadow-inner"
                   />
                 </div>

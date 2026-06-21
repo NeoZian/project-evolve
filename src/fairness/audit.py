@@ -2,7 +2,7 @@
 Fairness & Bias Audit Module for Project Evolve.
 
 This module audits demographic parity, group score gaps, department gaps,
-and a selected-department peer-review bias visualization. Equalized odds is not
+and selected-department score/peer-review bias visualizations. Equalized odds is not
 reported as a final metric because the prototype does not have real expert
 ground-truth labels; that limitation is explicitly stated in the JSON/HTML
 reports.
@@ -238,21 +238,47 @@ def generate_fairness_report(df, metrics, department_bias_result, selected_depar
 
     dept_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
 
+    # Use the selected department for BOTH charts. Earlier versions used the
+    # whole dataset in the first chart and only the selected department in the
+    # second chart, which made the page look unchanged when a different
+    # department was selected.
+    plot_df = dept_df.copy()
+
     plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
-    sns.boxplot(data=df, x="gender", y="final_evaluation_score", hue="gender", palette="Set2", legend=False)
-    plt.title("Final Score Distribution by Gender")
-    plt.ylabel("Evaluation Score")
+    if not plot_df.empty and plot_df["gender"].nunique() > 0:
+        sns.boxplot(
+            data=plot_df,
+            x="gender",
+            y="final_evaluation_score",
+            hue="gender",
+            palette="Set2",
+            legend=False,
+        )
+        plt.title(f"Final Score Distribution in {selected_department}")
+        plt.ylabel("Evaluation Score")
+    else:
+        plt.text(0.5, 0.5, f"No faculty data for {selected_department}", ha="center", va="center")
+        plt.title(f"Final Score Distribution in {selected_department}")
+        plt.ylabel("Evaluation Score")
 
     plt.subplot(1, 2, 2)
-    if not dept_df.empty:
-        sns.boxplot(data=dept_df, x="gender", y="peer_score", hue="gender", palette="Set1", legend=False)
+    if not plot_df.empty and plot_df["gender"].nunique() > 0:
+        sns.boxplot(
+            data=plot_df,
+            x="gender",
+            y="peer_score",
+            hue="gender",
+            palette="Set1",
+            legend=False,
+        )
         plt.title(f"Peer Score in {selected_department}")
         plt.ylabel("Peer Score")
     else:
         plt.text(0.5, 0.5, f"No faculty data for {selected_department}", ha="center", va="center")
         plt.title(f"Peer Score in {selected_department}")
+        plt.ylabel("Peer Score")
 
     plt.tight_layout()
     safe_department = "".join(c if c.isalnum() else "_" for c in str(selected_department)).strip("_") or "department"
@@ -398,7 +424,9 @@ if __name__ == "__main__":
     engine = create_engine(DATABASE_URL)
     df = load_data(engine)
     selected_department = resolve_selected_department(df, args.department)
-    metrics = compute_fairness_metrics(df)
+    selected_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
+    metrics_source = selected_df if not selected_df.empty else df
+    metrics = compute_fairness_metrics(metrics_source)
     department_bias = detect_department_peer_bias(df, selected_department)
     report, html_path = generate_fairness_report(df, metrics, department_bias, selected_department)
     send_alert(report, engine)

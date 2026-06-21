@@ -1282,33 +1282,48 @@ async def get_latest_fairness_report():
     files = glob.glob(os.path.join("reports", "fairness_report_*.json"))
     if not files:
         raise HTTPException(404, "No fairness reports found. Run audit first.")
-    latest = max(files, key=os.path.getctime)
+    latest = max(files, key=os.path.getmtime)
     with open(latest, "r") as f:
         return json.load(f)
 
 
 @app.post("/api/fairness/run")
 async def run_fairness_audit(department: Optional[str] = Query(None)):
-    try:
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        cmd = ["python", "src/fairness/audit.py"]
-        if department:
-            cmd.extend(["--department", department])
+    """Run a department-specific fairness audit and return that exact report.
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=project_root
+    The previous implementation launched the audit as a subprocess and then
+    guessed the newest JSON file from the reports folder. On some deployments
+    that could return an older CS/Engineering report, making the graph and
+    metrics look unchanged even after selecting another department. This version
+    runs the audit in-process and returns the report object produced for the
+    selected department.
+    """
+    try:
+        from src.fairness.audit import (
+            load_data as load_fairness_data,
+            resolve_selected_department,
+            compute_fairness_metrics,
+            detect_department_peer_bias,
+            generate_fairness_report,
+            send_alert,
         )
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Fairness audit failed: {result.stderr}")
-        files = glob.glob(os.path.join("reports", "fairness_report_*.json"))
-        if not files:
-            raise HTTPException(status_code=404, detail="No fairness report generated.")
-        latest = max(files, key=os.path.getctime)
-        with open(latest, "r") as f:
-            return json.load(f)
+
+        df = load_fairness_data(engine)
+        selected_department = resolve_selected_department(df, department)
+        selected_df = df[df["department"].astype(str).str.lower() == str(selected_department).lower()]
+        metrics_source = selected_df if not selected_df.empty else df
+
+        metrics = compute_fairness_metrics(metrics_source)
+        department_bias = detect_department_peer_bias(df, selected_department)
+        report, _html_path = generate_fairness_report(
+            df,
+            metrics,
+            department_bias,
+            selected_department,
+            output_dir="reports",
+        )
+        send_alert(report, engine)
+        return report
     except HTTPException:
         raise
     except Exception as e:
