@@ -1242,7 +1242,13 @@ def _load_departments_from_csv():
 
 @app.get("/api/fairness/departments")
 async def get_fairness_departments():
-    """Return departments from the same data source used by the audit run."""
+    """Return only departments that can actually run a fairness audit.
+
+    We intentionally do not fall back to the raw CSV department list here,
+    because that list can include departments with no usable evaluation/gender
+    data on the deployed database. Those options caused the selector to show
+    departments that failed when selected.
+    """
     sources_checked = []
 
     try:
@@ -1250,32 +1256,19 @@ async def get_fairness_departments():
         df = load_fairness_data(engine)
         departments = get_available_departments(df, include_overall=True, require_fairness_ready=True)
         sources_checked.append("evaluation_results/live_or_sql_fallback")
-        if departments:
-            return {
-                "departments": departments,
-                "source": "fairness_data_source",
-                "sources_checked": sources_checked,
-            }
+        return {
+            "departments": departments or [FAIRNESS_OVERALL_LABEL],
+            "source": "fairness_data_source",
+            "sources_checked": sources_checked,
+        }
     except Exception as e:
         print(f"Fairness data department load failed: {e}")
         sources_checked.append("evaluation_results_failed")
-
-    report_departments = _load_departments_from_reports()
-    sources_checked.append("reports")
-    if report_departments:
         return {
-            "departments": _normalise_department_list([FAIRNESS_OVERALL_LABEL] + report_departments),
-            "source": "reports",
+            "departments": [FAIRNESS_OVERALL_LABEL],
+            "source": "safe_overall_only_fallback",
             "sources_checked": sources_checked,
         }
-
-    csv_departments = _load_departments_from_csv()
-    sources_checked.append("data/raw/ratemyprofessor_sample.csv")
-    return {
-        "departments": _normalise_department_list([FAIRNESS_OVERALL_LABEL] + csv_departments),
-        "source": "csv_fallback",
-        "sources_checked": sources_checked,
-    }
 
 
 @app.get("/api/fairness/latest")
@@ -1326,7 +1319,10 @@ async def run_fairness_audit(department: Optional[str] = Query(None)):
             selected_department,
             output_dir="reports",
         )
-        send_alert(report, engine)
+        try:
+            send_alert(report, engine)
+        except Exception as alert_error:
+            print(f"Fairness audit alert/log save failed: {alert_error}")
         return report
     except HTTPException:
         raise

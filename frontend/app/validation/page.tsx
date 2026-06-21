@@ -24,6 +24,8 @@ interface ValidationReport {
   };
   flagged_faculty_count: number;
   flagged_faculty_sample: any[];
+  flagged_faculty_all?: any[];
+  flagged_review_guidance?: string;
   plot_path: string;
   human_expert_simulation?: {
     average_inter_rater_correlation: number;
@@ -36,6 +38,8 @@ export default function ValidationPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [flaggedPage, setFlaggedPage] = useState(1);
+  const flaggedPageSize = 10;
 
   const fetchLatestReport = async () => {
     try {
@@ -43,6 +47,7 @@ export default function ValidationPage() {
       if (res.ok) {
         const data = await res.json();
         setReport(data);
+        setFlaggedPage(1);
         setError(null);
       } else if (res.status === 404) {
         setError('No validation report found. Click "Run Validation" to generate one.');
@@ -70,6 +75,7 @@ export default function ValidationPage() {
       }
       const data = await res.json();
       setReport(data);
+      setFlaggedPage(1);
     } catch (err: any) {
       setError(err.message || 'Error running validation');
     } finally {
@@ -80,6 +86,18 @@ export default function ValidationPage() {
   useEffect(() => {
     fetchLatestReport();
   }, []);
+
+  const flaggedFaculty = report
+    ? ((report.flagged_faculty_all && report.flagged_faculty_all.length > 0)
+        ? report.flagged_faculty_all
+        : (report.flagged_faculty_sample || []))
+    : [];
+  const totalFlaggedPages = Math.max(1, Math.ceil(flaggedFaculty.length / flaggedPageSize));
+  const currentFlaggedPage = Math.min(flaggedPage, totalFlaggedPages);
+  const visibleFlaggedFaculty = flaggedFaculty.slice(
+    (currentFlaggedPage - 1) * flaggedPageSize,
+    currentFlaggedPage * flaggedPageSize
+  );
 
   if (loading) return (
     <div className="min-h-screen gradient-mesh flex items-center justify-center pt-28">
@@ -413,7 +431,7 @@ export default function ValidationPage() {
                   </div>
                 </div>
                 
-                {report.flagged_faculty_sample.length > 0 ? (
+                {flaggedFaculty.length > 0 ? (
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead>
@@ -427,8 +445,8 @@ export default function ValidationPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 dark:divide-white/5">
-                        {report.flagged_faculty_sample.map((faculty, idx) => (
-                          <tr key={idx} className="hover:bg-amber-50/30 dark:hover:amber-900/10 transition-colors">
+                        {visibleFlaggedFaculty.map((faculty, idx) => (
+                          <tr key={`${faculty.faculty_id}-${idx}-${currentFlaggedPage}`} className="hover:bg-amber-50/30 dark:hover:bg-amber-900/10 transition-colors">
                             <td className="px-8 py-4 font-bold text-gray-900 dark:text-white">#{faculty.faculty_id}</td>
                             <td className="px-8 py-4 font-semibold text-gray-800 dark:text-gray-200">{faculty.faculty_name}</td>
                             <td className="px-8 py-4 text-gray-600 dark:text-gray-400">{faculty.department}</td>
@@ -443,6 +461,35 @@ export default function ValidationPage() {
                         ))}
                       </tbody>
                     </table>
+                    <div className="flex flex-col gap-4 border-t border-gray-100 px-8 py-5 dark:border-white/5 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm font-semibold text-gray-600 dark:text-gray-400">
+                        Showing {((currentFlaggedPage - 1) * flaggedPageSize) + 1}-{Math.min(currentFlaggedPage * flaggedPageSize, flaggedFaculty.length)} of {flaggedFaculty.length} unique flagged faculty
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => setFlaggedPage((page) => Math.max(1, page - 1))}
+                          disabled={currentFlaggedPage <= 1}
+                          className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-gray-300"
+                        >
+                          Previous
+                        </button>
+                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">
+                          Page {currentFlaggedPage} of {totalFlaggedPages}
+                        </span>
+                        <button
+                          onClick={() => setFlaggedPage((page) => Math.min(totalFlaggedPages, page + 1))}
+                          disabled={currentFlaggedPage >= totalFlaggedPages}
+                          className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-gray-300"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                    <div className="border-t border-amber-100 bg-amber-50/60 px-8 py-5 dark:border-amber-900/30 dark:bg-amber-950/10">
+                      <p className="text-sm font-semibold leading-relaxed text-amber-800 dark:text-amber-300">
+                        {report.flagged_review_guidance || 'Flagged faculty should be reviewed by a human evaluator because the traditional student-only score and AI multi-source score disagree significantly. Check the full report, comments, peer/performance factors, and XAI explanation before taking any decision.'}
+                      </p>
+                    </div>
                   </div>
                 ) : (
                   <div className="p-12 text-center">

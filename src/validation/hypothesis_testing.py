@@ -33,6 +33,45 @@ def get_traditional_score(row):
     """4.1 – Simulated traditional evaluation: only student feedback rating."""
     return row['student_feedback_rating']
 
+def aggregate_faculty_records(df):
+    """Collapse repeated evaluation rows into one validation row per faculty.
+
+    The raw evaluation table can contain multiple student/comment records for the
+    same faculty member. Validation should compare methods at faculty level, not
+    raw feedback-row level, otherwise the flagged table repeats the same teacher.
+    """
+    if df.empty:
+        return df
+
+    numeric_columns = [
+        'student_feedback_rating',
+        'final_evaluation_score',
+        'peer_score',
+        'nlp_sentiment_score',
+        'avg_grade',
+        'course_quality_score',
+    ]
+    for column in numeric_columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors='coerce')
+
+    agg_spec = {
+        'faculty_name': 'first',
+        'department': 'first',
+        'student_feedback_rating': 'mean',
+        'final_evaluation_score': 'mean',
+    }
+    for column in ['peer_score', 'nlp_sentiment_score', 'avg_grade', 'course_quality_score']:
+        if column in df.columns:
+            agg_spec[column] = 'mean'
+
+    faculty_df = (
+        df.dropna(subset=['faculty_id'])
+          .groupby('faculty_id', as_index=False)
+          .agg(agg_spec)
+    )
+    return faculty_df
+
 def compare_scores(df):
     """
     4.2 – Compute correlation, RMSE, MAE between traditional and AI scores.
@@ -54,14 +93,19 @@ def compare_scores(df):
 
 def flag_disagreements(df, threshold=0.5):
     """
-    4.3 – Identify faculty where |AI - traditional| > threshold.
-    Returns a DataFrame of flagged faculty and saves to CSV.
+    4.3 – Identify unique faculty where |AI - traditional| > threshold.
+    Returns one row per faculty, sorted by largest disagreement.
     """
-    df['difference'] = abs(df['final_evaluation_score'] - df['traditional_score'])
+    df = df.copy()
+    df['difference'] = (df['final_evaluation_score'] - df['traditional_score']).abs()
     flagged = df[df['difference'] > threshold].copy()
-    flagged = flagged[['faculty_id', 'faculty_name', 'department', 
-                       'traditional_score', 'final_evaluation_score', 'difference']]
-    flagged = flagged.sort_values('difference', ascending=False)
+    flagged = flagged[[
+        'faculty_id', 'faculty_name', 'department',
+        'traditional_score', 'final_evaluation_score', 'difference'
+    ]]
+    for column in ['traditional_score', 'final_evaluation_score', 'difference']:
+        flagged[column] = pd.to_numeric(flagged[column], errors='coerce').round(4)
+    flagged = flagged.sort_values(['difference', 'faculty_id'], ascending=[False, True])
     return flagged
 
 def statistical_tests(df):
@@ -205,6 +249,12 @@ def generate_validation_report(df, comparison, flagged, stats, human_sim, output
         "expert_validation_note": "Expert validation is simulated in this prototype. Replace with real expert evaluation scores during the controlled trial.",
         "flagged_faculty_count": len(flagged),
         "flagged_faculty_sample": convert(flagged.head(10).to_dict(orient='records')),
+        "flagged_faculty_all": convert(flagged.to_dict(orient='records')),
+        "flagged_review_guidance": (
+            "Flagged faculty are not automatic failures. They should be reviewed by a human evaluator because "
+            "the student-only traditional score and the multi-source AI score disagree by more than 0.5. "
+            "Review the full report, feedback text, peer/performance factors, XAI explanation, and data quality before making any decision."
+        ),
         "plot_path": plot_path
     }
     
@@ -271,10 +321,13 @@ def main():
     # Connect to database
     engine = create_engine(DATABASE_URL)
     df = pd.read_sql("""
-        SELECT faculty_id, faculty_name, department, 
-               student_feedback_rating, final_evaluation_score
+        SELECT faculty_id, faculty_name, department,
+               student_feedback_rating, final_evaluation_score,
+               peer_score, nlp_sentiment_score, avg_grade, course_quality_score
         FROM evaluation_results
     """, engine)
+    df = aggregate_faculty_records(df)
+    df = df.dropna(subset=['student_feedback_rating', 'final_evaluation_score'])
     
     # 4.1 – Traditional baseline
     df['traditional_score'] = df.apply(get_traditional_score, axis=1)

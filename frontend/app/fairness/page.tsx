@@ -49,11 +49,13 @@ export default function FairnessPage() {
           .map((department) => String(department || '').trim())
           .filter((department) => department.length > 0)
       )
-    ).sort((a, b) => a.localeCompare(b));
+    );
 
-    const hasOverall = cleaned.some((department) => department.toLowerCase() === 'overall / all departments');
+    const withoutOverall = cleaned
+      .filter((department) => department.toLowerCase() !== 'overall / all departments')
+      .sort((a, b) => a.localeCompare(b));
     const finalList = cleaned.length > 0
-      ? (hasOverall ? cleaned : ['Overall / All Departments', ...cleaned])
+      ? ['Overall / All Departments', ...withoutOverall]
       : FALLBACK_DEPARTMENTS;
     setDepartments(finalList);
     setSelectedDepartment((current) => {

@@ -187,8 +187,10 @@ def get_available_departments(df, include_overall=False, require_fairness_ready=
         department = str(department).strip()
         if not department or department.lower() in {"nan", "none", "null", "unknown"}:
             continue
-        if require_fairness_ready and len(group) < MIN_DEPARTMENT_RECORDS:
-            continue
+        if require_fairness_ready:
+            usable_gender_counts = group["gender"].astype(str).str.strip().value_counts()
+            if len(group) < MIN_DEPARTMENT_RECORDS or (usable_gender_counts >= 5).sum() < 2:
+                continue
         key = department.lower()
         if key not in seen:
             seen.add(key)
@@ -348,6 +350,10 @@ def _make_selected_department_plot(dept_df, selected_department, output_dir, tim
             ax.set_axis_off()
     else:
         plot_df = dept_df.copy()
+        # Overall audits can contain thousands of raw rows. Sampling keeps the
+        # graph fast enough for Render while preserving the distribution shape.
+        if len(plot_df) > 5000:
+            plot_df = plot_df.sample(n=5000, random_state=42)
         plot_df["final_evaluation_score"] = pd.to_numeric(plot_df["final_evaluation_score"], errors="coerce")
         plot_df["peer_score"] = pd.to_numeric(plot_df["peer_score"], errors="coerce")
         plot_df["gender"] = plot_df["gender"].astype(str)
