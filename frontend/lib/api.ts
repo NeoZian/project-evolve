@@ -2,6 +2,8 @@
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 export const TOKEN_KEY = 'project_evolve_access_token';
 
+let tokenRequest: Promise<string> | null = null;
+
 export function getAuthToken() {
   if (typeof window === 'undefined') return '';
   return localStorage.getItem(TOKEN_KEY) || '';
@@ -15,19 +17,55 @@ export function clearAuthToken() {
   if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function apiFetch(input: string, init: RequestInit = {}) {
-  const token = getAuthToken();
+async function fetchBackendToken() {
+  const res = await fetch('/api/auth/backend-token', {
+    method: 'POST',
+    cache: 'no-store',
+  });
+
+  if (!res.ok) throw new Error('Backend token request failed');
+
+  const data = await res.json();
+  if (!data?.access_token) throw new Error('Backend token missing');
+
+  setAuthToken(data.access_token);
+  return data.access_token as string;
+}
+
+export async function ensureBackendToken() {
+  const existingToken = getAuthToken();
+  if (existingToken) return existingToken;
+
+  if (!tokenRequest) {
+    tokenRequest = fetchBackendToken().finally(() => {
+      tokenRequest = null;
+    });
+  }
+
+  return tokenRequest;
+}
+
+async function attachToken(init: RequestInit = {}) {
+  const token = await ensureBackendToken();
   const headers = new Headers(init.headers || {});
-  if (token) headers.set('x-access-token', token);
+  headers.set('x-access-token', token);
+  return { ...init, headers };
+}
 
-  const res = await fetch(input, { ...init, headers });
+export async function apiFetch(input: string, init: RequestInit = {}) {
+  let res = await fetch(input, await attachToken(init));
 
-  // If the Vercel login cookie exists but the backend token is missing/expired,
-  // send the user back to login so both frontend and Render API are unlocked again.
+  // If the backend token expired or localStorage was cleared, get a fresh token
+  // through the authenticated Next.js route and retry once before returning to login.
   if (res.status === 401 && typeof window !== 'undefined') {
     clearAuthToken();
-    const next = `${window.location.pathname}${window.location.search}`;
-    window.location.href = `/login?next=${encodeURIComponent(next)}`;
+
+    try {
+      res = await fetch(input, await attachToken(init));
+    } catch {
+      const next = `${window.location.pathname}${window.location.search}`;
+      window.location.href = `/login?next=${encodeURIComponent(next)}`;
+    }
   }
 
   return res;

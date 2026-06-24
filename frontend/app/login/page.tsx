@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
-import { loginBackendWithPassword } from '@/lib/api';
+import { ensureBackendToken } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -38,15 +38,16 @@ export default function LoginPage() {
         return;
       }
 
-      try {
-        await loginBackendWithPassword(password);
-      } catch {
-        setError('Password accepted, but the backend API could not be unlocked. Please check Render deployment and CORS settings.');
-        return;
-      }
-
+      // Navigate as soon as the Vercel/Next auth cookie is set.
+      // The dashboard will fetch or refresh the Render API token while its data loaders run.
       router.replace(nextPath);
       router.refresh();
+
+      // Warm the backend token in the background so the dashboard data starts loading sooner.
+      // Do not block navigation on a cold Render instance.
+      void ensureBackendToken().catch(() => {
+        // apiFetch will retry this when the dashboard requests data.
+      });
     } catch {
       setError('Unable to verify the password right now. Please try again.');
     } finally {
