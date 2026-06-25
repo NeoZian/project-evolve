@@ -90,6 +90,7 @@ if df_single.empty:
 
 instance = df_single.iloc[0][feature_cols].astype(float).values
 os.makedirs("explanations", exist_ok=True)
+safe_formula_version = FORMULA_VERSION.replace(".", "_").replace("-", "_")
 
 exp = explainer.explain_instance(
     instance,
@@ -98,6 +99,12 @@ exp = explainer.explain_instance(
 )
 html = exp.as_html()
 html = html.replace("LIME", f"LIME - Project Evolve {FORMULA_VERSION}", 1)
-with open(f"explanations/lime_{faculty_id}.html", "w", encoding="utf-8") as f:
+versioned_path = f"explanations/lime_{faculty_id}_{safe_formula_version}.html"
+legacy_path = f"explanations/lime_{faculty_id}.html"
+with open(versioned_path, "w", encoding="utf-8") as f:
+    f.write(html)
+# Also write the legacy path for direct local viewing, but the API serves the
+# versioned file to avoid stale formula output.
+with open(legacy_path, "w", encoding="utf-8") as f:
     f.write(html)
 print("OK")

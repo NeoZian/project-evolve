@@ -215,7 +215,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
               
               <div className="mb-5 rounded-2xl border border-blue-200/60 dark:border-blue-800/30 bg-blue-50/70 dark:bg-blue-950/20 p-4">
                 <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
-                  Canonical formula version: {data.formula_version || 'seven_factor_v1.0_2026_06'}
+                  Canonical formula version: {data.formula_version || 'evolve_seven_factor_v2.0_2026_06'}
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-blue-800/80 dark:text-blue-300/80 font-medium">
                   {data.formula || 'Final score uses all seven displayed contributors with their listed weights.'}

@@ -438,9 +438,9 @@ export default function FairnessPage() {
                         </div>
                         
                         <div className="pt-4 border-t border-gray-100 dark:border-white/5 flex items-center justify-between">
-                          <span className="text-sm text-gray-500 dark:text-gray-400 font-medium">Faculty Count</span>
+                          <span className="text-sm text-gray-500 dark:text-gray-400 font-medium">Evaluation Record Count</span>
                           <span className="px-4 py-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full font-bold text-sm">
-                            {report.fairness_metrics.count_by_gender[gender]} members
+                            {report.fairness_metrics.count_by_gender[gender]} records
                           </span>
                         </div>
                       </div>

@@ -70,11 +70,11 @@ def ensure_runtime_tables():
                     faculty_id INTEGER PRIMARY KEY,
                     shap_values_json TEXT,
                     base_value FLOAT,
-                    formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
+                    formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            conn.execute(sa.text("ALTER TABLE shap_explanations ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
+            conn.execute(sa.text("ALTER TABLE shap_explanations ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06'"))
 
             conn.execute(sa.text("""
                 CREATE TABLE IF NOT EXISTS blockchain_audit_logs (
@@ -84,14 +84,14 @@ def ensure_runtime_tables():
                     final_score FLOAT,
                     result_hash TEXT NOT NULL,
                     blockchain_tx_hash TEXT,
-                    formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
+                    formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06',
                     payload_json TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     status TEXT DEFAULT 'logged'
                 )
             """))
             conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS final_score FLOAT"))
-            conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
+            conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06'"))
             conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS payload_json TEXT"))
     except Exception as e:
         print(f"Runtime table initialization skipped: {e}")
@@ -181,6 +181,128 @@ def make_serializable(data):
     if isinstance(data, pd.DataFrame):
         return make_serializable(data.to_dict(orient="records"))
     return data
+
+
+SEVEN_FACTOR_AGGREGATE_SQL = """
+    SELECT
+        faculty_id,
+        ROUND(AVG(final_evaluation_score)::numeric, 4) AS final_evaluation_score,
+        ROUND(AVG(student_feedback_rating)::numeric, 4) AS student_feedback_rating,
+        ROUND(AVG(peer_score)::numeric, 4) AS peer_score,
+        ROUND(AVG(LEAST(GREATEST((avg_grade / 4.0) * 5.0, 1), 5))::numeric, 4) AS performance_score,
+        ROUND(AVG(nlp_sentiment_score)::numeric, 4) AS nlp_sentiment_score,
+        ROUND(AVG(course_material_score)::numeric, 4) AS course_material_score,
+        ROUND(AVG(service_score)::numeric, 4) AS service_score,
+        ROUND(AVG(pd_score)::numeric, 4) AS pd_score
+    FROM evaluation_results
+    GROUP BY faculty_id
+    ORDER BY faculty_id
+"""
+
+
+def _load_faculty_level_factors() -> pd.DataFrame:
+    """Load one aggregated seven-factor row per faculty member."""
+    return pd.read_sql(sa.text(SEVEN_FACTOR_AGGREGATE_SQL), engine)
+
+
+def _canonical_explanation_payload(faculty_id: int) -> dict:
+    """Build exact seven-factor additive attributions from current data.
+
+    This endpoint intentionally computes from evaluation_results at request time
+    instead of trusting cached shap_explanations rows. This keeps the
+    explanation aligned with the currently displayed score.
+    Contributions are baseline-relative: weight * (faculty_factor - population_mean_factor).
+    """
+    df = _load_faculty_level_factors()
+    if df.empty:
+        return {
+            "final_score": 0,
+            "base_value": 0,
+            "formula_version": FORMULA_VERSION,
+            "explanation_method": "canonical_additive_baseline_attribution",
+            "top_positive_factors": [],
+            "top_negative_factors": [],
+            "neutral_factors": [],
+            "all_factor_contributions": [],
+            "full_explanation": "Explanation not available because no evaluation records were found.",
+        }
+
+    df["faculty_id"] = df["faculty_id"].astype(int)
+    selected = df[df["faculty_id"] == int(faculty_id)]
+    if selected.empty:
+        raise HTTPException(404, "Faculty not found")
+
+    feature_cols = list(FACTOR_WEIGHTS.keys())
+    selected_row = selected.iloc[0]
+    baseline = df[feature_cols].astype(float).mean().to_dict()
+    base_value = calculate_seven_factor_score(baseline, rounded=False)
+    final_score = float(selected_row.get("final_evaluation_score", 0))
+
+    positive, negative, neutral, all_items = [], [], [], []
+    for key, weight in FACTOR_WEIGHTS.items():
+        value = float(selected_row[key])
+        baseline_value = float(baseline[key])
+        contribution = float(weight * (value - baseline_value))
+        item = {
+            "feature": FACTOR_LABELS.get(key, key.replace("_", " ").title()),
+            "feature_key": key,
+            "value": round(value, 4),
+            "baseline_value": round(baseline_value, 4),
+            "weight": weight,
+            "weight_percent": round(weight * 100, 1),
+            "weighted_contribution_to_score": round(weight * value, 4),
+            "contribution": round(contribution, 3),
+            "description": FACTOR_DESCRIPTIONS.get(key),
+            "source": FACTOR_SOURCES.get(key),
+        }
+        all_items.append(item)
+        if contribution > 0.0005:
+            positive.append(item)
+        elif contribution < -0.0005:
+            negative.append(item)
+        else:
+            neutral.append(item)
+
+    positive.sort(key=lambda x: x["contribution"], reverse=True)
+    negative.sort(key=lambda x: x["contribution"])
+    all_items.sort(key=lambda x: abs(x["contribution"]), reverse=True)
+
+    formula_score_from_aggregated_factors = calculate_seven_factor_score(selected_row.to_dict(), rounded=False)
+    approximation_gap = final_score - float(formula_score_from_aggregated_factors)
+
+    explanation_text = (
+        f"All seven canonical factors are included using formula version {FORMULA_VERSION}. "
+        f"The baseline prediction is {base_value:.2f}. Contributions are measured relative to the faculty-level population baseline; "
+        "positive values lift the faculty score above that baseline and negative values pull it below. "
+    )
+    if positive:
+        explanation_text += "Positive contributors: " + ", ".join(
+            [f"{p['feature']} ({p['contribution']:+.3f})" for p in positive]
+        ) + ". "
+    if negative:
+        explanation_text += "Negative contributors: " + ", ".join(
+            [f"{n['feature']} ({n['contribution']:+.3f})" for n in negative]
+        ) + ". "
+    if neutral:
+        explanation_text += "Near-baseline contributors: " + ", ".join([n["feature"] for n in neutral]) + ". "
+    if abs(approximation_gap) > 0.02:
+        explanation_text += (
+            f"The displayed final score is averaged from row-level evaluation records; the aggregate-factor formula differs by {approximation_gap:+.3f}."
+        )
+
+    return {
+        "final_score": round(final_score, 4),
+        "base_value": round(float(base_value), 4),
+        "formula_version": FORMULA_VERSION,
+        "explanation_method": "canonical_additive_baseline_attribution",
+        "top_positive_factors": positive[:7],
+        "top_negative_factors": negative[:7],
+        "neutral_factors": neutral,
+        "all_factor_contributions": all_items,
+        "formula_score_from_aggregated_factors": round(float(formula_score_from_aggregated_factors), 4),
+        "aggregation_gap": round(float(approximation_gap), 4),
+        "full_explanation": explanation_text.strip(),
+    }
 
 
 WEB3_PROVIDER_URL = os.getenv("WEB3_PROVIDER_URL", "http://127.0.0.1:8545")
@@ -669,10 +791,8 @@ async def get_all_faculties(
 async def evaluate_faculty(faculty_id: int):
     """Return the canonical seven-factor faculty evaluation report.
 
-    Earlier versions of the frontend displayed five cards while the stored
-    final score used seven contributors. This endpoint now returns all seven
-    formula factors plus the formula metadata needed by the frontend, PDF, XAI,
-    and audit layers.
+    This endpoint returns all seven formula factors plus the formula metadata
+    needed by the frontend, PDF, XAI, and audit layers.
     """
     df = pd.read_sql(
         sa.text("""
@@ -716,8 +836,8 @@ async def evaluate_faculty(faculty_id: int):
     factor_breakdown = build_factor_breakdown(factor_values)
     formula_score = calculate_seven_factor_score(factor_values)
 
-    # key_factors is retained for frontend/backward compatibility, but it now
-    # contains all seven canonical factors rather than the old five-card subset.
+    # key_factors is retained for frontend/backward compatibility and contains
+    # all seven canonical factors.
     key_factors = {
         "student_feedback": float(row.get("student_feedback_rating", 0)),
         "peer_review": float(row.get("peer_score", 0)),
@@ -757,77 +877,13 @@ async def evaluate_faculty(faculty_id: int):
 
 @app.get("/explanation/{faculty_id}")
 async def get_explanation(faculty_id: int):
-    df_shap = pd.read_sql(
-        sa.text("""
-            SELECT shap_values_json, base_value, formula_version
-            FROM shap_explanations
-            WHERE faculty_id = :faculty_id
-        """),
-        engine,
-        params={"faculty_id": faculty_id}
-    )
-    if df_shap.empty:
-        return {
-            "final_score": 0,
-            "base_value": 0,
-            "formula_version": FORMULA_VERSION,
-            "top_positive_factors": [],
-            "top_negative_factors": [],
-            "all_factor_contributions": [],
-            "full_explanation": "Explanation not available. Run seven-factor SHAP precomputation first."
-        }
+    """Return synchronized seven-factor explainability output.
 
-    row = df_shap.iloc[0]
-    shap_dict = json.loads(row["shap_values_json"])
-    base = float(row["base_value"])
-    formula_version = row.get("formula_version") or FORMULA_VERSION
-
-    df_eval = pd.read_sql(
-        sa.text("""
-            SELECT ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score
-            FROM evaluation_results
-            WHERE faculty_id = :faculty_id
-        """),
-        engine,
-        params={"faculty_id": faculty_id}
-    )
-    final_score = float(df_eval.iloc[0]["final_evaluation_score"]) if not df_eval.empty else base
-
-    positive, negative, all_items = [], [], []
-    for feature, value in shap_dict.items():
-        contribution = round(float(value), 3)
-        item = {
-            "feature": FACTOR_LABELS.get(feature, feature.replace("_", " ").title()),
-            "feature_key": feature,
-            "contribution": contribution,
-            "weight": FACTOR_WEIGHTS.get(feature),
-            "description": FACTOR_DESCRIPTIONS.get(feature),
-        }
-        all_items.append(item)
-        if contribution > 0:
-            positive.append(item)
-        else:
-            negative.append(item)
-
-    positive.sort(key=lambda x: x["contribution"], reverse=True)
-    negative.sort(key=lambda x: x["contribution"])
-    all_items.sort(key=lambda x: abs(x["contribution"]), reverse=True)
-
-    explanation_text = f"The seven-factor base prediction is {base:.2f} using formula version {formula_version}. "
-    if positive:
-        explanation_text += "Positive contributors: " + ", ".join([f"{p['feature']} (+{p['contribution']})" for p in positive[:5]]) + ". "
-    if negative:
-        explanation_text += "Negative contributors: " + ", ".join([f"{n['feature']} ({n['contribution']})" for n in negative[:5]]) + "."
-
-    return {
-        "final_score": final_score,
-        "base_value": base,
-        "formula_version": formula_version,
-        "top_positive_factors": positive[:7],
-        "top_negative_factors": negative[:7],
-        "all_factor_contributions": all_items,
-        "full_explanation": explanation_text
-    }
+    The explanation is computed directly from the current seven-factor
+    evaluation_results table so the XAI view always matches the score shown
+    in the report.
+    """
+    return make_serializable(_canonical_explanation_payload(faculty_id))
 
 
 @app.get("/explanation/lime/{faculty_id}")
@@ -845,7 +901,14 @@ async def get_lime_explanation(faculty_id: int):
         )
         if result.returncode != 0:
             raise HTTPException(500, f"LIME generation failed: {result.stderr}")
-        html_path = f"explanations/lime_{faculty_id}.html"
+        safe_version = FORMULA_VERSION.replace(".", "_").replace("-", "_")
+        html_path = f"explanations/lime_{faculty_id}_{safe_version}.html"
+        if not os.path.exists(html_path):
+            # Backward-compatible fallback only for local development. The
+            # generator also writes the versioned path to keep LIME outputs
+            # aligned with the formula version.
+            legacy_path = f"explanations/lime_{faculty_id}.html"
+            html_path = legacy_path if os.path.exists(legacy_path) else html_path
         if not os.path.exists(html_path):
             raise HTTPException(404, "LIME HTML file was not generated")
         with open(html_path, "r", encoding="utf-8") as f:
@@ -1138,23 +1201,17 @@ async def export_audit_pdf(faculty_id: int):
     if not recommendations:
         recommendations.append(["Maintain Continuous Improvement", "Overall indicators are stable. Continue monitoring all seven evidence dimensions each term."])
 
-    shap_summary = "Explanation not available. Run seven-factor SHAP precomputation first."
     try:
-        df_shap = pd.read_sql(
-            sa.text("""
-                SELECT shap_values_json, base_value, formula_version
-                FROM shap_explanations
-                WHERE faculty_id = :faculty_id
-            """),
-            engine,
-            params={"faculty_id": faculty_id}
-        )
-        if not df_shap.empty:
-            shap_dict = json.loads(df_shap.iloc[0]["shap_values_json"])
-            ordered = sorted(shap_dict.items(), key=lambda item: abs(float(item[1])), reverse=True)[:7]
-            shap_summary = ", ".join([f"{FACTOR_LABELS.get(k, k.replace('_', ' ').title())}: {float(v):+.3f}" for k, v in ordered])
+        explanation_payload = _canonical_explanation_payload(faculty_id)
+        ordered = explanation_payload.get("all_factor_contributions", [])
+        shap_summary = "; ".join([
+            f"{item['feature']}: {float(item['contribution']):+.3f} "
+            f"(value {float(item['value']):.2f}, baseline {float(item['baseline_value']):.2f}, weight {float(item['weight']) * 100:.0f}%)"
+            for item in ordered
+        ])
     except Exception as e:
-        print(f"PDF SHAP lookup failed: {e}")
+        print(f"PDF canonical explanation generation failed: {e}")
+        shap_summary = "Canonical seven-factor explanation unavailable for this faculty record."
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -1262,7 +1319,7 @@ async def export_audit_pdf(faculty_id: int):
             "Content-Disposition": f"attachment; filename=project_evolve_seven_factor_audit_{faculty_id}.pdf",
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
-            "X-Project-Evolve-PDF-Version": "seven-factor-v1"
+            "X-Project-Evolve-PDF-Version": "seven-factor-v2"
         }
     )
 

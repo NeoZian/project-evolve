@@ -86,14 +86,14 @@ with engine.begin() as conn:
             final_score FLOAT,
             result_hash TEXT NOT NULL,
             blockchain_tx_hash TEXT,
-            formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
+            formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06',
             payload_json TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             status TEXT DEFAULT 'logged'
         )
     """))
     conn.execute(text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS final_score FLOAT"))
-    conn.execute(text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
+    conn.execute(text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06'"))
     conn.execute(text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS payload_json TEXT"))
     conn.execute(text("DELETE FROM blockchain_audit_logs"))
     for rec in records:

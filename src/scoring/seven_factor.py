@@ -2,8 +2,8 @@
 
 This module is deliberately dependency-light so that the backend, XAI scripts,
 PDF export, and audit regeneration job can all call exactly the same scoring
-logic. Keeping the formula in one place prevents the earlier mismatch where the
-stored score used seven factors but the website and XAI scripts showed only five.
+logic. Keeping the formula in one place ensures that the backend, frontend,
+XAI, PDF, and audit layers use the same model definition.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 
 import math
 
-FORMULA_VERSION = "seven_factor_v1.0_2026_06"
+FORMULA_VERSION = "evolve_seven_factor_v2.0_2026_06"
 
 # These weights sum to 1.00. The order is also the display order used in the UI.
 FACTOR_WEIGHTS = OrderedDict([

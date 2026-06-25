@@ -149,7 +149,7 @@ export default function AuditPage() {
                         </td>
                         <td className="px-8 py-5">
                           <span className="inline-flex px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-200/50 dark:border-emerald-800/30">
-                            {tx.formula_version || 'seven_factor_v1.0_2026_06'}
+                            {tx.formula_version || 'evolve_seven_factor_v2.0_2026_06'}
                           </span>
                         </td>
                         <td className="px-8 py-5">

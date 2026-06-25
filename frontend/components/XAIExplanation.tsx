@@ -151,6 +151,51 @@ export default function XAIExplanation({ explanation }: { explanation: any }) {
         </div>
       </div>
 
+
+      {/* Canonical Seven-Factor Contribution Table */}
+      {explanation.all_factor_contributions && explanation.all_factor_contributions.length > 0 && (
+        <div className="mb-8 rounded-3xl p-6 border-2 border-blue-200/50 dark:border-blue-800/30 bg-gradient-to-br from-blue-50/70 via-white to-indigo-50/40 dark:from-blue-950/20 dark:via-[#12121a] dark:to-indigo-950/20 shadow-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-5">
+            <div>
+              <h4 className="text-lg font-bold text-blue-900 dark:text-blue-200">All Seven Canonical Factors</h4>
+              <p className="text-xs font-medium text-blue-700/70 dark:text-blue-300/70 mt-1">
+                Baseline-relative additive attribution: contribution = factor weight x (faculty value - population baseline).
+              </p>
+            </div>
+            <div className="px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-bold">
+              {explanation.formula_version || 'evolve_seven_factor_v2.0_2026_06'}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-blue-200/60 dark:border-blue-800/30">
+                  <th className="py-3 pr-4 font-bold">Factor</th>
+                  <th className="py-3 px-4 font-bold text-right">Value</th>
+                  <th className="py-3 px-4 font-bold text-right">Baseline</th>
+                  <th className="py-3 px-4 font-bold text-right">Weight</th>
+                  <th className="py-3 pl-4 font-bold text-right">XAI Contribution</th>
+                </tr>
+              </thead>
+              <tbody>
+                {explanation.all_factor_contributions.map((item: any, i: number) => (
+                  <tr key={item.feature_key || i} className="border-b border-gray-100 dark:border-white/5 last:border-0">
+                    <td className="py-3 pr-4 font-semibold text-gray-800 dark:text-gray-200">{item.feature}</td>
+                    <td className="py-3 px-4 text-right tabular-nums text-gray-700 dark:text-gray-300">{Number(item.value).toFixed(2)}</td>
+                    <td className="py-3 px-4 text-right tabular-nums text-gray-700 dark:text-gray-300">{Number(item.baseline_value).toFixed(2)}</td>
+                    <td className="py-3 px-4 text-right tabular-nums text-gray-700 dark:text-gray-300">{Number(item.weight_percent ?? item.weight * 100).toFixed(0)}%</td>
+                    <td className={`py-3 pl-4 text-right tabular-nums font-black ${Number(item.contribution) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {Number(item.contribution) >= 0 ? '+' : ''}{Number(item.contribution).toFixed(3)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Full Explanation Callout Box */}
       <div className="relative bg-gradient-to-br from-blue-50/80 via-white to-purple-50/50 dark:from-[#12121a] dark:via-[#12121a] dark:to-purple-950/20 rounded-3xl p-8 border-2 border-blue-200/50 dark:border-blue-800/30 shadow-lg">
         <div className="absolute top-0 left-8 -translate-y-1/2 px-4 py-1.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white text-xs font-bold uppercase tracking-wider rounded-full shadow-lg">

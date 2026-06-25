@@ -83,11 +83,11 @@ with engine.begin() as conn:
             faculty_id INTEGER PRIMARY KEY,
             shap_values_json TEXT,
             base_value FLOAT,
-            formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
+            formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """))
-    conn.execute(text("ALTER TABLE shap_explanations ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
+    conn.execute(text("ALTER TABLE shap_explanations ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'evolve_seven_factor_v2.0_2026_06'"))
 
     for rec in shap_records:
         conn.execute(text("""

@@ -131,7 +131,7 @@ export default function BlockchainAudit({ audit }: { audit: any }) {
       <div className="mt-6 flex items-start gap-3 px-2">
         <ShieldCheck className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" strokeWidth={2} />
         <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed font-medium">
-          {verificationText} Formula version: {audit.formula_version || 'seven_factor_v1.0_2026_06'}.
+          {verificationText} Formula version: {audit.formula_version || 'evolve_seven_factor_v2.0_2026_06'}.
         </p>
       </div>
     </div>
