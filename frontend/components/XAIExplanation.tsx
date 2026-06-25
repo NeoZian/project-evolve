@@ -16,7 +16,7 @@ export default function XAIExplanation({ explanation }: { explanation: any }) {
             Explainable AI Analysis
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
-            Understanding the factors behind this evaluation score
+            Understanding the seven canonical factors behind this evaluation score
           </p>
         </div>
       </div>

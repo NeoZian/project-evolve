@@ -102,6 +102,19 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
     }
   };
 
+  const factorCards = Array.isArray(data?.factor_breakdown) && data.factor_breakdown.length
+    ? data.factor_breakdown
+    : Object.entries(data?.key_factors || {}).map(([key, value]: any) => ({
+        key,
+        label: key.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        value,
+        weight_percent: undefined,
+        weighted_contribution: undefined,
+        description: ''
+      }));
+
+  const factorValue = (key: string) => Number(factorCards.find((f: any) => f.key === key)?.value ?? 0);
+
   if (!data) return (
     <div className="min-h-screen gradient-mesh flex items-center justify-center pt-28">
       <div className="text-center animate-fade-in-up">
@@ -200,37 +213,62 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">Key Performance Factors</h2>
               </div>
               
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                {Object.entries({
-                  ...data.key_factors,
-                  course_quality: data.course_quality_score || 0
-                }).map(([key, value]: any, index) => (
+              <div className="mb-5 rounded-2xl border border-blue-200/60 dark:border-blue-800/30 bg-blue-50/70 dark:bg-blue-950/20 p-4">
+                <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+                  Canonical formula version: {data.formula_version || 'seven_factor_v1.0_2026_06'}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-blue-800/80 dark:text-blue-300/80 font-medium">
+                  {data.formula || 'Final score uses all seven displayed contributors with their listed weights.'}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+                {factorCards.map((factor: any, index: number) => (
                   <div 
-                    key={key} 
+                    key={factor.key || factor.label}
                     className="group relative bg-gradient-to-br from-gray-50 to-white dark:from-white/[0.03] dark:to-transparent rounded-2xl p-5 border border-gray-200/60 dark:border-white/5 hover:border-blue-300/60 dark:hover:border-blue-600/30 hover:shadow-lg transition-all duration-300 hover:-translate-y-1"
                     style={{ animationDelay: `${index * 75}ms` }}
+                    title={factor.description || ''}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                     
                     <div className="relative z-10">
-                      <p className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3 truncate">
-                        {key.replace('_', ' ').replace('rating', 'Feedback').replace('score', 'Score')}
+                      <p className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2 min-h-[2rem] leading-tight">
+                        {factor.label}
                       </p>
                       <p className="text-3xl font-black text-gray-900 dark:text-white tabular-nums">
-                        {Number(value).toFixed(1)}
+                        {Number(factor.value).toFixed(1)}
                       </p>
+                      <div className="mt-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        <span>{factor.weight_percent !== undefined ? `${factor.weight_percent}%` : 'factor'}</span>
+                        <span>{factor.weighted_contribution !== undefined ? `+${Number(factor.weighted_contribution).toFixed(2)}` : ''}</span>
+                      </div>
                       
                       {/* Mini Progress Bar */}
                       <div className="mt-3 h-1.5 bg-gray-100 dark:bg-white/5 rounded-full overflow-hidden">
                         <div 
                           className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-1000"
-                          style={{ width: `${(Number(value) / 5) * 100}%` }}
+                          style={{ width: `${(Number(factor.value) / 5) * 100}%` }}
                         />
                       </div>
+                      <p className="mt-3 text-[11px] leading-snug text-gray-500 dark:text-gray-400 line-clamp-3">
+                        {factor.description}
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
+
+              {data.supporting_values && (
+                <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {Object.entries(data.supporting_values).map(([key, value]: any) => (
+                    <div key={key} className="rounded-xl border border-gray-200/60 dark:border-white/5 bg-gray-50/70 dark:bg-white/[0.03] p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">{key.replace(/_/g, ' ')}</p>
+                      <p className="mt-1 text-lg font-black text-gray-900 dark:text-white tabular-nums">{Number(value).toFixed(2)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* LIME Explanation Section */}
@@ -352,7 +390,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {data.key_factors?.nlp_sentiment < 3 && (
+                {factorValue('nlp_sentiment_score') < 3 && (
                   <div className="group relative bg-gradient-to-br from-amber-50 to-orange-50/30 dark:from-amber-950/30 dark:to-orange-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
                     <div className="flex items-start gap-4">
                       <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
@@ -370,7 +408,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
                   </div>
                 )}
                 
-                {data.key_factors?.student_feedback < 3.5 && (
+                {factorValue('student_feedback_rating') < 3.5 && (
                   <div className="group relative bg-gradient-to-br from-amber-50 to-yellow-50/30 dark:from-amber-950/30 dark:to-yellow-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
                     <div className="flex items-start gap-4">
                       <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
@@ -388,7 +426,7 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
                   </div>
                 )}
                 
-                {data.key_factors?.peer_review < 3.5 && (
+                {factorValue('peer_score') < 3.5 && (
                   <div className="group relative bg-gradient-to-br from-amber-50 to-orange-50/30 dark:from-amber-950/30 dark:to-orange-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
                     <div className="flex items-start gap-4">
                       <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
@@ -406,6 +444,70 @@ export default function FacultyDetail({ params }: { params: Promise<{ id: string
                   </div>
                 )}
                 
+                {factorValue('performance_score') < 3.5 && (
+                  <div className="group relative bg-gradient-to-br from-amber-50 to-yellow-50/30 dark:from-amber-950/30 dark:to-yellow-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
+                        <Award className="w-6 h-6 text-amber-600 dark:text-amber-400" strokeWidth={2} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-amber-900 dark:text-amber-200 text-lg mb-2">Support Student Outcomes</h3>
+                        <p className="text-amber-800/70 dark:text-amber-400/70 font-medium leading-relaxed text-sm">
+                          The normalized performance factor is below target. Review assessment difficulty, early intervention practices, and student-support mechanisms.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {factorValue('course_material_score') < 3.5 && (
+                  <div className="group relative bg-gradient-to-br from-amber-50 to-orange-50/30 dark:from-amber-950/30 dark:to-orange-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
+                        <FileText className="w-6 h-6 text-amber-600 dark:text-amber-400" strokeWidth={2} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-amber-900 dark:text-amber-200 text-lg mb-2">Strengthen Course Materials</h3>
+                        <p className="text-amber-800/70 dark:text-amber-400/70 font-medium leading-relaxed text-sm">
+                          Course-material evidence is below target. Review syllabus clarity, assignment descriptions, rubrics, reading load, and learning-resource organization.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {factorValue('service_score') < 3 && (
+                  <div className="group relative bg-gradient-to-br from-amber-50 to-yellow-50/30 dark:from-amber-950/30 dark:to-yellow-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
+                        <Users className="w-6 h-6 text-amber-600 dark:text-amber-400" strokeWidth={2} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-amber-900 dark:text-amber-200 text-lg mb-2">Document Service Contribution</h3>
+                        <p className="text-amber-800/70 dark:text-amber-400/70 font-medium leading-relaxed text-sm">
+                          Service contribution is low in the prototype record. Include committee work, mentoring, curriculum service, outreach, or student advising evidence.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {factorValue('pd_score') < 3 && (
+                  <div className="group relative bg-gradient-to-br from-amber-50 to-yellow-50/30 dark:from-amber-950/30 dark:to-yellow-950/10 p-6 rounded-2xl border-2 border-amber-200/60 dark:border-amber-800/30 hover:shadow-xl hover:shadow-amber-500/10 transition-all duration-300 hover:-translate-y-0.5">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex-shrink-0">
+                        <Rocket className="w-6 h-6 text-amber-600 dark:text-amber-400" strokeWidth={2} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-amber-900 dark:text-amber-200 text-lg mb-2">Increase Professional Development</h3>
+                        <p className="text-amber-800/70 dark:text-amber-400/70 font-medium leading-relaxed text-sm">
+                          Professional-development evidence is low in the prototype record. Add workshops, teaching certifications, conferences, or pedagogical training.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {data.final_evaluation_score > 4.2 && (
                   <div className="md:col-span-2 group relative bg-gradient-to-br from-emerald-50 via-white to-green-50/30 dark:from-emerald-950/30 dark:via-[#12121a] dark:to-green-950/10 p-8 rounded-2xl border-2 border-emerald-200/60 dark:border-emerald-800/30 hover:shadow-xl hover:shadow-emerald-500/10 transition-all duration-300 hover:-translate-y-0.5">
                     <div className="flex items-start gap-5">

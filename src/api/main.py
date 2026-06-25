@@ -24,6 +24,18 @@ from typing import Optional
 from scipy.stats import ttest_ind
 from dotenv import load_dotenv
 from src.fairness.mitigation import mitigate_bias
+from src.scoring.seven_factor import (
+    FORMULA_VERSION,
+    FACTOR_WEIGHTS,
+    FACTOR_LABELS,
+    FACTOR_DESCRIPTIONS,
+    FACTOR_SOURCES,
+    clamp_score,
+    normalize_performance_score,
+    calculate_seven_factor_score,
+    build_factor_breakdown,
+    canonical_audit_payload,
+)
 import math
 
 
@@ -58,21 +70,29 @@ def ensure_runtime_tables():
                     faculty_id INTEGER PRIMARY KEY,
                     shap_values_json TEXT,
                     base_value FLOAT,
+                    formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
+            conn.execute(sa.text("ALTER TABLE shap_explanations ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
 
             conn.execute(sa.text("""
                 CREATE TABLE IF NOT EXISTS blockchain_audit_logs (
                     id SERIAL PRIMARY KEY,
                     evaluation_id INTEGER,
                     faculty_id INTEGER NOT NULL,
+                    final_score FLOAT,
                     result_hash TEXT NOT NULL,
                     blockchain_tx_hash TEXT,
+                    formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06',
+                    payload_json TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     status TEXT DEFAULT 'logged'
                 )
             """))
+            conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS final_score FLOAT"))
+            conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS formula_version TEXT DEFAULT 'seven_factor_v1.0_2026_06'"))
+            conn.execute(sa.text("ALTER TABLE blockchain_audit_logs ADD COLUMN IF NOT EXISTS payload_json TEXT"))
     except Exception as e:
         print(f"Runtime table initialization skipped: {e}")
 
@@ -582,8 +602,14 @@ async def get_all_faculties(
                 ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
                 ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
                 ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade,
+                ROUND(AVG(LEAST(GREATEST((avg_grade / 4.0) * 5.0, 1), 5))::numeric, 2) AS performance_score,
                 ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
-                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
+                ROUND(AVG(course_material_score)::numeric, 2) AS course_material_score,
+                ROUND(AVG(service_score)::numeric, 2) AS service_score,
+                ROUND(AVG(pd_score)::numeric, 2) AS pd_score,
+                ROUND(AVG(total_service_hours)::numeric, 2) AS total_service_hours,
+                ROUND(AVG(total_pd_hours)::numeric, 2) AS total_pd_hours
             FROM evaluation_results
             GROUP BY faculty_id, faculty_name, department
         )
@@ -641,6 +667,13 @@ async def get_all_faculties(
 
 @app.get("/evaluate/{faculty_id}")
 async def evaluate_faculty(faculty_id: int):
+    """Return the canonical seven-factor faculty evaluation report.
+
+    Earlier versions of the frontend displayed five cards while the stored
+    final score used seven contributors. This endpoint now returns all seven
+    formula factors plus the formula metadata needed by the frontend, PDF, XAI,
+    and audit layers.
+    """
     df = pd.read_sql(
         sa.text("""
             SELECT
@@ -648,11 +681,17 @@ async def evaluate_faculty(faculty_id: int):
                 faculty_name,
                 department,
                 ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score,
-                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
                 ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
                 ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
+                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade,
+                ROUND(AVG(LEAST(GREATEST((avg_grade / 4.0) * 5.0, 1), 5))::numeric, 2) AS performance_score,
                 ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
-                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
+                ROUND(AVG(course_material_score)::numeric, 2) AS course_material_score,
+                ROUND(AVG(service_score)::numeric, 2) AS service_score,
+                ROUND(AVG(pd_score)::numeric, 2) AS pd_score,
+                ROUND(AVG(total_service_hours)::numeric, 2) AS total_service_hours,
+                ROUND(AVG(total_pd_hours)::numeric, 2) AS total_pd_hours
             FROM evaluation_results
             WHERE faculty_id = :faculty_id
             GROUP BY faculty_id, faculty_name, department
@@ -665,19 +704,54 @@ async def evaluate_faculty(faculty_id: int):
         raise HTTPException(status_code=404, detail="Faculty not found")
 
     row = df.iloc[0]
+    factor_values = {
+        "student_feedback_rating": row.get("student_feedback_rating"),
+        "peer_score": row.get("peer_score"),
+        "performance_score": row.get("performance_score"),
+        "nlp_sentiment_score": row.get("nlp_sentiment_score"),
+        "course_material_score": row.get("course_material_score"),
+        "service_score": row.get("service_score"),
+        "pd_score": row.get("pd_score"),
+    }
+    factor_breakdown = build_factor_breakdown(factor_values)
+    formula_score = calculate_seven_factor_score(factor_values)
+
+    # key_factors is retained for frontend/backward compatibility, but it now
+    # contains all seven canonical factors rather than the old five-card subset.
+    key_factors = {
+        "student_feedback": float(row.get("student_feedback_rating", 0)),
+        "peer_review": float(row.get("peer_score", 0)),
+        "performance": float(row.get("performance_score", 0)),
+        "nlp_sentiment": float(row.get("nlp_sentiment_score", 0)),
+        "course_material": float(row.get("course_material_score", 0)),
+        "service_contribution": float(row.get("service_score", 0)),
+        "professional_development": float(row.get("pd_score", 0)),
+    }
 
     return {
         "faculty_id": int(row["faculty_id"]),
         "faculty_name": row["faculty_name"],
         "department": row["department"],
         "final_evaluation_score": float(row["final_evaluation_score"]),
+        "computed_formula_score_from_aggregated_factors": float(formula_score),
+        "formula_version": FORMULA_VERSION,
+        "formula": "0.25*student_feedback + 0.20*peer_review + 0.15*performance + 0.10*nlp_sentiment + 0.05*course_material + 0.15*service_contribution + 0.10*professional_development",
+        "weights": dict(FACTOR_WEIGHTS),
+        "factor_breakdown": factor_breakdown,
+        "key_factors": key_factors,
+        "supporting_values": {
+            "avg_grade_raw": float(row.get("avg_grade", 0)),
+            "course_quality_proxy_not_in_final_formula": float(row.get("course_quality_score", 0)),
+            "total_service_hours": float(row.get("total_service_hours", 0)),
+            "total_pd_hours": float(row.get("total_pd_hours", 0)),
+        },
+        # Kept for old frontend components. The canonical course factor is now
+        # course_material_score, but course_quality_score remains useful as a
+        # supporting proxy display value.
         "course_quality_score": float(row.get("course_quality_score", 0)),
-        "key_factors": {
-            "student_feedback": float(row["student_feedback_rating"]),
-            "peer_review": float(row["peer_score"]),
-            "nlp_sentiment": float(row["nlp_sentiment_score"]),
-            "performance": float(row["avg_grade"])
-        }
+        "course_material_score": float(row.get("course_material_score", 0)),
+        "service_score": float(row.get("service_score", 0)),
+        "pd_score": float(row.get("pd_score", 0)),
     }
 
 
@@ -685,7 +759,7 @@ async def evaluate_faculty(faculty_id: int):
 async def get_explanation(faculty_id: int):
     df_shap = pd.read_sql(
         sa.text("""
-            SELECT shap_values_json, base_value
+            SELECT shap_values_json, base_value, formula_version
             FROM shap_explanations
             WHERE faculty_id = :faculty_id
         """),
@@ -695,38 +769,63 @@ async def get_explanation(faculty_id: int):
     if df_shap.empty:
         return {
             "final_score": 0,
+            "base_value": 0,
+            "formula_version": FORMULA_VERSION,
             "top_positive_factors": [],
             "top_negative_factors": [],
-            "full_explanation": "Explanation not available. Run SHAP precomputation first."
+            "all_factor_contributions": [],
+            "full_explanation": "Explanation not available. Run seven-factor SHAP precomputation first."
         }
+
     row = df_shap.iloc[0]
     shap_dict = json.loads(row["shap_values_json"])
     base = float(row["base_value"])
+    formula_version = row.get("formula_version") or FORMULA_VERSION
+
     df_eval = pd.read_sql(
-        sa.text("SELECT final_evaluation_score FROM evaluation_results WHERE faculty_id = :faculty_id"),
+        sa.text("""
+            SELECT ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score
+            FROM evaluation_results
+            WHERE faculty_id = :faculty_id
+        """),
         engine,
         params={"faculty_id": faculty_id}
     )
     final_score = float(df_eval.iloc[0]["final_evaluation_score"]) if not df_eval.empty else base
-    positive, negative = [], []
+
+    positive, negative, all_items = [], [], []
     for feature, value in shap_dict.items():
-        item = {"feature": feature.replace("_", " ").title(), "contribution": round(float(value), 3)}
-        if value > 0:
+        contribution = round(float(value), 3)
+        item = {
+            "feature": FACTOR_LABELS.get(feature, feature.replace("_", " ").title()),
+            "feature_key": feature,
+            "contribution": contribution,
+            "weight": FACTOR_WEIGHTS.get(feature),
+            "description": FACTOR_DESCRIPTIONS.get(feature),
+        }
+        all_items.append(item)
+        if contribution > 0:
             positive.append(item)
         else:
             negative.append(item)
+
     positive.sort(key=lambda x: x["contribution"], reverse=True)
     negative.sort(key=lambda x: x["contribution"])
-    explanation_text = f"The base prediction is {base:.2f}. "
+    all_items.sort(key=lambda x: abs(x["contribution"]), reverse=True)
+
+    explanation_text = f"The seven-factor base prediction is {base:.2f} using formula version {formula_version}. "
     if positive:
-        explanation_text += "Positive contributors: " + ", ".join([f"{p['feature']} (+{p['contribution']})" for p in positive[:3]]) + ". "
+        explanation_text += "Positive contributors: " + ", ".join([f"{p['feature']} (+{p['contribution']})" for p in positive[:5]]) + ". "
     if negative:
-        explanation_text += "Negative contributors: " + ", ".join([f"{n['feature']} ({n['contribution']})" for n in negative[:3]]) + "."
+        explanation_text += "Negative contributors: " + ", ".join([f"{n['feature']} ({n['contribution']})" for n in negative[:5]]) + "."
+
     return {
         "final_score": final_score,
         "base_value": base,
-        "top_positive_factors": positive[:3],
-        "top_negative_factors": negative[:3],
+        "formula_version": formula_version,
+        "top_positive_factors": positive[:7],
+        "top_negative_factors": negative[:7],
+        "all_factor_contributions": all_items,
         "full_explanation": explanation_text
     }
 
@@ -777,55 +876,87 @@ async def precompute_shap():
 
 @app.get("/audit/{faculty_id}")
 async def get_audit_trail(faculty_id: int):
+    """Return the most recent canonical seven-factor audit hash for one faculty.
+
+    Prefer blockchain_audit_logs because it can be regenerated from the current
+    seven-factor payload. Fall back to the legacy evaluation_results_with_blockchain
+    table only when no canonical log exists.
+    """
     try:
         inspector = sa.inspect(engine)
-        if not inspector.has_table("evaluation_results_with_blockchain"):
-            return {
-                "faculty_id": faculty_id,
-                "final_score": 0,
-                "blockchain_tx_hash": "0xPending",
-                "result_hash": "N/A",
-                "timestamp": str(datetime.utcnow()),
-                "status": "No blockchain table found yet."
-            }
-        df = pd.read_sql(
-            sa.text("""
-                SELECT *
-                FROM evaluation_results_with_blockchain
-                WHERE faculty_id = :faculty_id
-                LIMIT 1
-            """),
-            engine,
-            params={"faculty_id": faculty_id}
-        )
-        if df.empty:
-            return {
-                "faculty_id": faculty_id,
-                "final_score": 0,
-                "blockchain_tx_hash": "0xPending",
-                "result_hash": "N/A",
-                "timestamp": str(datetime.utcnow()),
-                "status": "No blockchain record found."
-            }
-        row = df.iloc[0]
-        timestamp_value = row.get("timestamp", row.get("logged_at", datetime.utcnow()))
+
+        if inspector.has_table("blockchain_audit_logs"):
+            df = pd.read_sql(
+                sa.text("""
+                    SELECT faculty_id, final_score, blockchain_tx_hash, result_hash,
+                           timestamp, status, formula_version
+                    FROM blockchain_audit_logs
+                    WHERE faculty_id = :faculty_id
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                """),
+                engine,
+                params={"faculty_id": faculty_id}
+            )
+            if not df.empty:
+                row = df.iloc[0]
+                return {
+                    "faculty_id": int(row["faculty_id"]),
+                    "final_score": float(row.get("final_score") or 0),
+                    "blockchain_tx_hash": row.get("blockchain_tx_hash") or "Database-only canonical hash",
+                    "result_hash": row.get("result_hash") or "N/A",
+                    "timestamp": str(row.get("timestamp", datetime.utcnow())),
+                    "status": row.get("status") or "Canonical seven-factor audit hash available.",
+                    "formula_version": row.get("formula_version") or FORMULA_VERSION,
+                    "audit_source": "blockchain_audit_logs"
+                }
+
+        if inspector.has_table("evaluation_results_with_blockchain"):
+            df = pd.read_sql(
+                sa.text("""
+                    SELECT *
+                    FROM evaluation_results_with_blockchain
+                    WHERE faculty_id = :faculty_id
+                    LIMIT 1
+                """),
+                engine,
+                params={"faculty_id": faculty_id}
+            )
+            if not df.empty:
+                row = df.iloc[0]
+                timestamp_value = row.get("timestamp", row.get("logged_at", datetime.utcnow()))
+                return {
+                    "faculty_id": int(row["faculty_id"]),
+                    "final_score": float(row.get("final_evaluation_score", 0)),
+                    "blockchain_tx_hash": row.get("blockchain_tx_hash") or "Legacy record without transaction hash",
+                    "result_hash": row.get("result_hash", "N/A"),
+                    "timestamp": str(timestamp_value),
+                    "status": "Legacy audit record from an earlier scoring version. Regenerate canonical seven-factor audit hashes before final deployment.",
+                    "formula_version": "legacy_pre_seven_factor",
+                    "audit_source": "evaluation_results_with_blockchain"
+                }
+
         return {
-            "faculty_id": int(row["faculty_id"]),
-            "final_score": float(row.get("final_evaluation_score", 0)),
-            "blockchain_tx_hash": row.get("blockchain_tx_hash", "0xPending"),
-            "result_hash": row.get("result_hash", "N/A"),
-            "timestamp": str(timestamp_value),
-            "status": "Tamper-proof audit record available on private blockchain."
+            "faculty_id": faculty_id,
+            "final_score": 0,
+            "blockchain_tx_hash": "Not available",
+            "result_hash": "N/A",
+            "timestamp": str(datetime.utcnow()),
+            "status": "No audit record found. Run src/audit/regenerate_audit_hashes.py to create canonical seven-factor hashes.",
+            "formula_version": FORMULA_VERSION,
+            "audit_source": "none"
         }
     except Exception as e:
         print(f"Audit endpoint error: {e}")
         return {
             "faculty_id": faculty_id,
             "final_score": 0,
-            "blockchain_tx_hash": "0xPending",
+            "blockchain_tx_hash": "Not available",
             "result_hash": "N/A",
             "timestamp": str(datetime.utcnow()),
-            "status": "Blockchain audit currently unavailable."
+            "status": "Blockchain/audit service currently unavailable.",
+            "formula_version": FORMULA_VERSION,
+            "audit_source": "error"
         }
 
 
@@ -873,7 +1004,11 @@ async def verify_blockchain(faculty_id: int):
 
 @app.get("/export_pdf/{faculty_id}")
 async def export_audit_pdf(faculty_id: int):
-    """Generate a complete faculty audit PDF with evaluation factors, recommendations, and blockchain hashes."""
+    """Generate a complete seven-factor faculty audit PDF.
+
+    The PDF now matches the canonical seven-factor score used by
+    evaluation_results and the updated SHAP/LIME scripts.
+    """
 
     def fmt(value, default="Not available"):
         if value is None:
@@ -902,11 +1037,17 @@ async def export_audit_pdf(faculty_id: int):
                 faculty_name,
                 department,
                 ROUND(AVG(final_evaluation_score)::numeric, 2) AS final_evaluation_score,
-                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
                 ROUND(AVG(student_feedback_rating)::numeric, 2) AS student_feedback_rating,
                 ROUND(AVG(peer_score)::numeric, 2) AS peer_score,
+                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade,
+                ROUND(AVG(LEAST(GREATEST((avg_grade / 4.0) * 5.0, 1), 5))::numeric, 2) AS performance_score,
                 ROUND(AVG(nlp_sentiment_score)::numeric, 2) AS nlp_sentiment_score,
-                ROUND(AVG(avg_grade)::numeric, 2) AS avg_grade
+                ROUND(AVG(course_quality_score)::numeric, 2) AS course_quality_score,
+                ROUND(AVG(course_material_score)::numeric, 2) AS course_material_score,
+                ROUND(AVG(service_score)::numeric, 2) AS service_score,
+                ROUND(AVG(pd_score)::numeric, 2) AS pd_score,
+                ROUND(AVG(total_service_hours)::numeric, 2) AS total_service_hours,
+                ROUND(AVG(total_pd_hours)::numeric, 2) AS total_pd_hours
             FROM evaluation_results
             WHERE faculty_id = :faculty_id
             GROUP BY faculty_id, faculty_name, department
@@ -919,20 +1060,44 @@ async def export_audit_pdf(faculty_id: int):
 
     row = df_db.iloc[0]
     final_score = score(row.get("final_evaluation_score"))
-    student_feedback = score(row.get("student_feedback_rating"))
-    peer_review = score(row.get("peer_score"))
-    nlp_sentiment = score(row.get("nlp_sentiment_score"))
-    performance = score(row.get("avg_grade"))
-    course_quality = score(row.get("course_quality_score"))
+    factor_values = {
+        "student_feedback_rating": row.get("student_feedback_rating"),
+        "peer_score": row.get("peer_score"),
+        "performance_score": row.get("performance_score"),
+        "nlp_sentiment_score": row.get("nlp_sentiment_score"),
+        "course_material_score": row.get("course_material_score"),
+        "service_score": row.get("service_score"),
+        "pd_score": row.get("pd_score"),
+    }
+    factor_breakdown = build_factor_breakdown(factor_values)
 
     result_hash = "Not available"
     transaction_hash = "Not available"
     audit_timestamp = "Not available"
-    audit_status = "No blockchain audit record was found for this faculty member."
+    audit_status = "No canonical audit record was found for this faculty member."
 
     inspector = sa.inspect(engine)
     try:
-        if inspector.has_table("evaluation_results_with_blockchain"):
+        if inspector.has_table("blockchain_audit_logs"):
+            log_df = pd.read_sql(
+                sa.text("""
+                    SELECT result_hash, blockchain_tx_hash, timestamp, status, formula_version
+                    FROM blockchain_audit_logs
+                    WHERE faculty_id = :faculty_id
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                """),
+                engine,
+                params={"faculty_id": faculty_id}
+            )
+            if not log_df.empty:
+                log_row = log_df.iloc[0]
+                result_hash = fmt(log_row.get("result_hash"), result_hash)
+                transaction_hash = fmt(log_row.get("blockchain_tx_hash"), transaction_hash)
+                audit_timestamp = fmt(log_row.get("timestamp"), audit_timestamp)
+                audit_status = fmt(log_row.get("status"), audit_status)
+
+        if result_hash == "Not available" and inspector.has_table("evaluation_results_with_blockchain"):
             audit_df = pd.read_sql(
                 sa.text("""
                     SELECT *
@@ -948,80 +1113,36 @@ async def export_audit_pdf(faculty_id: int):
                 result_hash = fmt(audit_row.get("result_hash"), result_hash)
                 transaction_hash = fmt(audit_row.get("blockchain_tx_hash"), transaction_hash)
                 audit_timestamp = fmt(audit_row.get("timestamp", audit_row.get("logged_at")), audit_timestamp)
-                audit_status = "Tamper-proof audit record available on private blockchain."
-
-        if (transaction_hash == "Not available" or result_hash == "Not available") and inspector.has_table("blockchain_audit_logs"):
-            log_df = pd.read_sql(
-                sa.text("""
-                    SELECT result_hash, blockchain_tx_hash, timestamp, status
-                    FROM blockchain_audit_logs
-                    WHERE faculty_id = :faculty_id
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                """),
-                engine,
-                params={"faculty_id": faculty_id}
-            )
-            if not log_df.empty:
-                log_row = log_df.iloc[0]
-                result_hash = fmt(log_row.get("result_hash"), result_hash)
-                transaction_hash = fmt(log_row.get("blockchain_tx_hash"), transaction_hash)
-                audit_timestamp = fmt(log_row.get("timestamp"), audit_timestamp)
-                audit_status = fmt(log_row.get("status"), audit_status)
+                audit_status = "Legacy blockchain audit record found; regenerate canonical seven-factor audit hashes for final deployment."
     except Exception as e:
         print(f"PDF audit lookup failed: {e}")
 
-    if contract is not None and result_hash == "Not available":
-        try:
-            onchain = contract.functions.getEvaluation(faculty_id).call()
-            result_hash = fmt(onchain[2], result_hash)
-            audit_timestamp = fmt(datetime.fromtimestamp(onchain[1]), audit_timestamp)
-            audit_status = "Result hash was retrieved from the private blockchain contract."
-        except Exception as e:
-            print(f"PDF blockchain contract lookup failed: {e}")
-
     recommendations = []
-    if nlp_sentiment < 3:
-        recommendations.append([
-            "Improve Clarity in Explanations",
-            "Student comments and NLP topic modeling indicate possible confusion in course delivery. Add concrete examples, visual aids, and short summary recaps during lectures."
-        ])
-    if student_feedback < 3.5:
-        recommendations.append([
-            "Boost Student Engagement",
-            "Student feedback is below the preferred range. Increase interactive activities, office-hour visibility, and opportunities for student participation."
-        ])
-    if peer_review < 3.5:
-        recommendations.append([
-            "Schedule Peer Observation",
-            "Peer review score is below the target level. A peer teaching observation can identify practical pedagogical improvements."
-        ])
-    if course_quality < 3.5:
-        recommendations.append([
-            "Strengthen Course Materials",
-            "Course quality score suggests room for improvement. Review syllabus alignment, learning materials, assignments, and assessment rubrics."
-        ])
-    if performance < 3.5:
-        recommendations.append([
-            "Support Student Success",
-            "Student performance indicators are below the target range. Consider early intervention, formative assessments, and additional learning support."
-        ])
+    factor_map = {item["key"]: item["value"] for item in factor_breakdown}
+    if factor_map.get("nlp_sentiment_score", 0) < 3:
+        recommendations.append(["Improve Clarity in Explanations", "Student comments and NLP sentiment indicate possible confusion. Add concrete examples, visual aids, and recap checkpoints."])
+    if factor_map.get("student_feedback_rating", 0) < 3.5:
+        recommendations.append(["Boost Student Engagement", "Student feedback is below the preferred range. Increase interaction, office-hour visibility, and participation opportunities."])
+    if factor_map.get("peer_score", 0) < 3.5:
+        recommendations.append(["Schedule Peer Observation", "Peer score is below target. A structured teaching observation can provide practical improvement evidence."])
+    if factor_map.get("performance_score", 0) < 3.5:
+        recommendations.append(["Support Student Success", "Student outcome indicators are below target. Consider formative assessment, early intervention, and learning support."])
+    if factor_map.get("course_material_score", 0) < 3.5:
+        recommendations.append(["Strengthen Course Materials", "Course material/readability score suggests room for improvement. Review syllabus clarity, rubrics, assignments, and learning resources."])
+    if factor_map.get("service_score", 0) < 3:
+        recommendations.append(["Increase Documented Academic Service", "Service contribution evidence is low in the prototype record. Record committee work, mentoring, outreach, or curriculum service."])
+    if factor_map.get("pd_score", 0) < 3:
+        recommendations.append(["Expand Professional Development", "Professional-development score is low in the prototype record. Add workshops, teaching certifications, conferences, or pedagogy training."])
     if final_score > 4.2:
-        recommendations.append([
-            "Exceptional Performance",
-            "Outstanding results across evaluation metrics. Continue current best practices and consider mentoring junior faculty or leading departmental initiatives."
-        ])
+        recommendations.append(["Exceptional Overall Performance", "The canonical seven-factor score is high. Continue current best practices and consider mentoring junior faculty or leading initiatives."])
     if not recommendations:
-        recommendations.append([
-            "Maintain Continuous Improvement",
-            "Overall indicators are stable. Continue monitoring student feedback, peer observations, course quality, and performance outcomes each term."
-        ])
+        recommendations.append(["Maintain Continuous Improvement", "Overall indicators are stable. Continue monitoring all seven evidence dimensions each term."])
 
-    shap_summary = "Explanation not available. Run SHAP precomputation first."
+    shap_summary = "Explanation not available. Run seven-factor SHAP precomputation first."
     try:
         df_shap = pd.read_sql(
             sa.text("""
-                SELECT shap_values_json, base_value
+                SELECT shap_values_json, base_value, formula_version
                 FROM shap_explanations
                 WHERE faculty_id = :faculty_id
             """),
@@ -1030,8 +1151,8 @@ async def export_audit_pdf(faculty_id: int):
         )
         if not df_shap.empty:
             shap_dict = json.loads(df_shap.iloc[0]["shap_values_json"])
-            ordered = sorted(shap_dict.items(), key=lambda item: abs(float(item[1])), reverse=True)[:5]
-            shap_summary = ", ".join([f"{k.replace('_', ' ').title()}: {float(v):+.3f}" for k, v in ordered])
+            ordered = sorted(shap_dict.items(), key=lambda item: abs(float(item[1])), reverse=True)[:7]
+            shap_summary = ", ".join([f"{FACTOR_LABELS.get(k, k.replace('_', ' ').title())}: {float(v):+.3f}" for k, v in ordered])
     except Exception as e:
         print(f"PDF SHAP lookup failed: {e}")
 
@@ -1043,39 +1164,13 @@ async def export_audit_pdf(faculty_id: int):
         leftMargin=0.65 * inch,
         topMargin=0.55 * inch,
         bottomMargin=0.55 * inch,
-        title=f"Project Evolve Audit Report - Faculty {faculty_id}"
+        title=f"Project Evolve Seven-Factor Audit Report - Faculty {faculty_id}"
     )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "ProjectEvolveTitle",
-        parent=styles["Title"],
-        fontSize=18,
-        leading=22,
-        spaceAfter=12,
-        textColor=colors.HexColor("#1f2937")
-    )
-    section_style = ParagraphStyle(
-        "ProjectEvolveSection",
-        parent=styles["Heading2"],
-        fontSize=13,
-        leading=16,
-        spaceBefore=10,
-        spaceAfter=8,
-        textColor=colors.HexColor("#1d4ed8")
-    )
-    normal = ParagraphStyle(
-        "ProjectEvolveNormal",
-        parent=styles["BodyText"],
-        fontSize=9.5,
-        leading=13,
-        spaceAfter=6,
-    )
-    small = ParagraphStyle(
-        "ProjectEvolveSmall",
-        parent=styles["BodyText"],
-        fontSize=8,
-        leading=10,
-    )
+    title_style = ParagraphStyle("ProjectEvolveTitle", parent=styles["Title"], fontSize=18, leading=22, spaceAfter=12, textColor=colors.HexColor("#1f2937"))
+    section_style = ParagraphStyle("ProjectEvolveSection", parent=styles["Heading2"], fontSize=13, leading=16, spaceBefore=10, spaceAfter=8, textColor=colors.HexColor("#1d4ed8"))
+    normal = ParagraphStyle("ProjectEvolveNormal", parent=styles["BodyText"], fontSize=9.5, leading=13, spaceAfter=6)
+    small = ParagraphStyle("ProjectEvolveSmall", parent=styles["BodyText"], fontSize=8, leading=10)
 
     def p(text, style=normal):
         return Paragraph(str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), style)
@@ -1087,21 +1182,22 @@ async def export_audit_pdf(faculty_id: int):
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-            ("LEADING", (0, 0), (-1, -1), 10.5),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.2),
+            ("LEADING", (0, 0), (-1, -1), 10.2),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
         return t
 
     story = []
-    story.append(Paragraph("Project Evolve - Complete Faculty Audit Report", title_style))
+    story.append(Paragraph("Project Evolve - Seven-Factor Faculty Audit Report", title_style))
     story.append(p(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC", small))
+    story.append(p(f"Canonical formula version: {FORMULA_VERSION}", small))
     story.append(Spacer(1, 8))
 
     story.append(Paragraph("Faculty Overview", section_style))
@@ -1113,20 +1209,34 @@ async def export_audit_pdf(faculty_id: int):
         [p("Final Evaluation Score", small), p(fmt(final_score), small)],
     ], [2.0 * inch, 4.3 * inch]))
 
+    story.append(Paragraph("Canonical Seven-Factor Formula", section_style))
+    story.append(p("Final Score = 0.25*Student Feedback + 0.20*Peer Review + 0.15*Performance + 0.10*NLP Sentiment + 0.05*Course Material + 0.15*Service Contribution + 0.10*Professional Development", normal))
+
     story.append(Paragraph("Evaluation Factors", section_style))
+    factor_rows = [[p("Factor", small), p("Value", small), p("Weight", small), p("Weighted contribution", small), p("Meaning/source", small)]]
+    for item in factor_breakdown:
+        factor_rows.append([
+            p(item["label"], small),
+            p(fmt(item["value"]), small),
+            p(f"{item['weight_percent']:.1f}%", small),
+            p(fmt(item["weighted_contribution"]), small),
+            p(item["description"], small),
+        ])
+    story.append(table(factor_rows, [1.35 * inch, 0.55 * inch, 0.55 * inch, 0.9 * inch, 3.0 * inch]))
+
+    story.append(Paragraph("Supporting Non-Formula Values", section_style))
     story.append(table([
-        [p("Factor", small), p("Score / Value", small), p("Purpose", small)],
-        [p("Student Feedback", small), p(fmt(student_feedback), small), p("Aggregated student survey rating.", small)],
-        [p("Peer Review", small), p(fmt(peer_review), small), p("Structured peer evaluation score.", small)],
-        [p("NLP Sentiment", small), p(fmt(nlp_sentiment), small), p("Sentiment analysis of qualitative comments.", small)],
-        [p("Student Performance", small), p(fmt(performance), small), p("Anonymised grade or success-rate indicator.", small)],
-        [p("Course Quality", small), p(fmt(course_quality), small), p("Course material and design quality indicator.", small)],
-    ], [2.0 * inch, 1.3 * inch, 3.0 * inch]))
+        [p("Value", small), p("Display", small), p("Note", small)],
+        [p("Raw avg_grade", small), p(fmt(row.get("avg_grade")), small), p("Stored student outcome value before normalization.", small)],
+        [p("Course quality proxy", small), p(fmt(row.get("course_quality_score")), small), p("Legacy/display proxy; canonical formula uses course_material_score.", small)],
+        [p("Total service hours", small), p(fmt(row.get("total_service_hours")), small), p("Used to generate service_score.", small)],
+        [p("Total PD hours", small), p(fmt(row.get("total_pd_hours")), small), p("Used to generate pd_score.", small)],
+    ], [1.8 * inch, 1.0 * inch, 3.5 * inch]))
 
     story.append(Paragraph("Explainable AI Summary", section_style))
     story.append(p(shap_summary, normal))
 
-    story.append(Paragraph("Blockchain Audit Details", section_style))
+    story.append(Paragraph("Audit Details", section_style))
     story.append(table([
         [p("Audit Field", small), p("Value", small)],
         [p("Transaction Hash", small), p(transaction_hash, small)],
@@ -1141,7 +1251,7 @@ async def export_audit_pdf(faculty_id: int):
     story.append(table(recommendation_rows, [2.0 * inch, 4.3 * inch]))
 
     story.append(Spacer(1, 10))
-    story.append(p("This report is generated by Project Evolve to support fair, transparent, and auditable faculty development decisions.", small))
+    story.append(p("This report is generated for transparent, human-reviewed faculty development. It is not an automatic high-stakes personnel decision.", small))
 
     doc.build(story)
     buffer.seek(0)
@@ -1149,10 +1259,10 @@ async def export_audit_pdf(faculty_id: int):
         content=buffer.getvalue(),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=project_evolve_complete_audit_{faculty_id}.pdf",
+            "Content-Disposition": f"attachment; filename=project_evolve_seven_factor_audit_{faculty_id}.pdf",
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
-            "X-Project-Evolve-PDF-Version": "2"
+            "X-Project-Evolve-PDF-Version": "seven-factor-v1"
         }
     )
 
@@ -1376,14 +1486,17 @@ async def get_dashboard_stats():
     blockchain_count = 0
     try:
         inspector = sa.inspect(engine)
-        if inspector.has_table("evaluation_results_with_blockchain"):
+        if inspector.has_table("blockchain_audit_logs"):
+            blockchain_count = pd.read_sql("SELECT COUNT(*) FROM blockchain_audit_logs", engine).iloc[0, 0]
+        if (not blockchain_count) and inspector.has_table("evaluation_results_with_blockchain"):
             blockchain_count = pd.read_sql("SELECT COUNT(*) FROM evaluation_results_with_blockchain", engine).iloc[0, 0]
     except Exception:
         blockchain_count = 0
     return {
         "average_score": round(float(avg_score or 0), 2),
         "bias_detected": round(float(bias_value or 0), 3),
-        "blockchain_logged": int(blockchain_count)
+        "blockchain_logged": int(blockchain_count),
+        "formula_version": FORMULA_VERSION
     }
 
 
@@ -1392,8 +1505,43 @@ async def get_audit_trail_paginated(page: int = Query(1, ge=1), limit: int = Que
     offset = (page - 1) * limit
     try:
         inspector = sa.inspect(engine)
+
+        if inspector.has_table("blockchain_audit_logs"):
+            total = pd.read_sql("SELECT COUNT(*) FROM blockchain_audit_logs", engine).iloc[0, 0]
+            if int(total or 0) > 0:
+                df = pd.read_sql(
+                    sa.text("""
+                        SELECT
+                            faculty_id,
+                            final_score,
+                            blockchain_tx_hash,
+                            result_hash,
+                            timestamp,
+                            status,
+                            formula_version
+                        FROM blockchain_audit_logs
+                        ORDER BY timestamp DESC, id DESC
+                        LIMIT :limit OFFSET :offset
+                    """),
+                    engine,
+                    params={"limit": limit, "offset": offset}
+                )
+                df = df.where(pd.notnull(df), None)
+                return {
+                    "transactions": make_serializable(df.to_dict(orient="records")),
+                    "audit_source": "blockchain_audit_logs",
+                    "formula_version": FORMULA_VERSION,
+                    "pagination": {
+                        "page": page,
+                        "limit": limit,
+                        "total": int(total),
+                        "total_pages": (int(total) + limit - 1) // limit if total > 0 else 0
+                    }
+                }
+
         if not inspector.has_table("evaluation_results_with_blockchain"):
-            return {"transactions": [], "pagination": {"page": page, "limit": limit, "total": 0, "total_pages": 0}}
+            return {"transactions": [], "audit_source": "none", "pagination": {"page": page, "limit": limit, "total": 0, "total_pages": 0}}
+
         columns = [col["name"] for col in inspector.get_columns("evaluation_results_with_blockchain")]
         score_col = "final_evaluation_score" if "final_evaluation_score" in columns else "NULL"
         tx_hash_col = "blockchain_tx_hash" if "blockchain_tx_hash" in columns else "NULL"
@@ -1405,7 +1553,9 @@ async def get_audit_trail_paginated(page: int = Query(1, ge=1), limit: int = Que
                 {score_col} as final_score,
                 {tx_hash_col} as blockchain_tx_hash,
                 {result_hash_col} as result_hash,
-                {ts_col} as timestamp
+                {ts_col} as timestamp,
+                'legacy_pre_seven_factor' as formula_version,
+                'Legacy audit table from earlier scoring version; regenerate canonical hashes.' as status
             FROM evaluation_results_with_blockchain
             ORDER BY {ts_col} DESC
             LIMIT :limit OFFSET :offset
@@ -1415,6 +1565,8 @@ async def get_audit_trail_paginated(page: int = Query(1, ge=1), limit: int = Que
         total = pd.read_sql("SELECT COUNT(*) FROM evaluation_results_with_blockchain", engine).iloc[0, 0]
         return {
             "transactions": make_serializable(df.to_dict(orient="records")),
+            "audit_source": "evaluation_results_with_blockchain_legacy",
+            "formula_version": "legacy_pre_seven_factor",
             "pagination": {
                 "page": page,
                 "limit": limit,
@@ -1424,7 +1576,7 @@ async def get_audit_trail_paginated(page: int = Query(1, ge=1), limit: int = Que
         }
     except Exception as e:
         print(f"Audit paginated query failed: {e}")
-        return {"transactions": [], "pagination": {"page": page, "limit": limit, "total": 0, "total_pages": 0}}
+        return {"transactions": [], "audit_source": "error", "pagination": {"page": page, "limit": limit, "total": 0, "total_pages": 0}}
 
 
 @app.get("/health")

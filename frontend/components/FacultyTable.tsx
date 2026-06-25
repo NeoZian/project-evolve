@@ -134,7 +134,7 @@ export default function FacultyTable() {
                 Department
               </th>
               <th className="px-8 py-5 text-center text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                Performance Score
+                Final Evaluation Score
               </th>
               <th className="px-8 py-5 text-center text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                 Actions

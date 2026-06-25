@@ -1,10 +1,26 @@
+"""Generate seven-factor LIME explanations for a selected faculty member."""
+from __future__ import annotations
+
 import os
 import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from lime.lime_tabular import LimeTabularExplainer
 from sqlalchemy import create_engine, text
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.scoring.seven_factor import (  # noqa: E402
+    FORMULA_VERSION,
+    FACTOR_WEIGHTS,
+    FACTOR_LABELS,
+    calculate_seven_factor_score,
+)
 
 load_dotenv()
 
@@ -21,102 +37,67 @@ if len(sys.argv) < 2:
 
 faculty_id = int(sys.argv[1])
 
-df_all = pd.read_sql("""
+aggregate_sql = """
     SELECT
-        student_feedback_rating,
-        peer_score,
-        avg_grade,
-        nlp_sentiment_score,
-        course_quality_score,
-        final_evaluation_score
+        faculty_id,
+        ROUND(AVG(student_feedback_rating)::numeric, 4) AS student_feedback_rating,
+        ROUND(AVG(peer_score)::numeric, 4) AS peer_score,
+        ROUND(AVG(LEAST(GREATEST((avg_grade / 4.0) * 5.0, 1), 5))::numeric, 4) AS performance_score,
+        ROUND(AVG(nlp_sentiment_score)::numeric, 4) AS nlp_sentiment_score,
+        ROUND(AVG(course_material_score)::numeric, 4) AS course_material_score,
+        ROUND(AVG(service_score)::numeric, 4) AS service_score,
+        ROUND(AVG(pd_score)::numeric, 4) AS pd_score,
+        ROUND(AVG(final_evaluation_score)::numeric, 4) AS final_evaluation_score
     FROM evaluation_results
-""", engine)
+    GROUP BY faculty_id
+    ORDER BY faculty_id
+"""
 
-feature_cols = [
-    "student_feedback_rating",
-    "peer_score",
-    "avg_grade",
-    "nlp_sentiment_score",
-    "course_quality_score"
-]
-
+df_all = pd.read_sql(aggregate_sql, engine)
 if df_all.empty:
     print("No evaluation_results records found. Run the data and AI layers first.")
     sys.exit(1)
 
-X = df_all[feature_cols].values
-y = df_all["final_evaluation_score"].values
+feature_cols = list(FACTOR_WEIGHTS.keys())
+X = df_all[feature_cols].astype(float).values
+y = df_all["final_evaluation_score"].astype(float).values
 
 
 def weighted_score_prediction(x):
-    """
-    LIME perturbs samples. Therefore, do not map perturbed rows back to
-    original gender/department by row index. Protected attributes are audited
-    in the fairness module, not used inside this local explanation function.
-    """
+    """Predict with the canonical seven-factor formula for LIME perturbations."""
     scores = []
     for row in x:
-        student_fb = row[0]
-        peer = row[1]
-        avg_grade = row[2]
-        nlp_sent = row[3]
-        course_qual = row[4]
-
-        perf_score = (avg_grade / 4.0) * 5.0
-        perf_score = np.clip(perf_score, 1, 5)
-
-        score = (
-            student_fb * 0.35 +
-            peer * 0.25 +
-            perf_score * 0.20 +
-            nlp_sent * 0.10 +
-            course_qual * 0.10
-        )
-        scores.append(np.clip(score, 1, 5))
+        values = {feature_cols[i]: float(np.clip(row[i], 1.0, 5.0)) for i in range(len(feature_cols))}
+        scores.append(calculate_seven_factor_score(values, rounded=False))
     return np.array(scores)
 
 
-feature_names = [
-    "Student Feedback",
-    "Peer Review",
-    "Avg Grade",
-    "NLP Sentiment",
-    "Course Quality"
-]
+feature_names = [FACTOR_LABELS[col] for col in feature_cols]
 
 explainer = LimeTabularExplainer(
     X,
     feature_names=feature_names,
     mode="regression",
-    training_labels=y
+    training_labels=y,
+    discretize_continuous=True,
+    verbose=False,
 )
 
-df_single = pd.read_sql(
-    text("""
-        SELECT
-            student_feedback_rating,
-            peer_score,
-            avg_grade,
-            nlp_sentiment_score,
-            course_quality_score
-        FROM evaluation_results
-        WHERE faculty_id = :faculty_id
-    """),
-    engine,
-    params={"faculty_id": faculty_id}
-)
-
+df_single = df_all[df_all["faculty_id"].astype(int) == faculty_id]
 if df_single.empty:
     print(f"Faculty ID {faculty_id} not found")
     sys.exit(1)
 
-instance = df_single.values[0]
+instance = df_single.iloc[0][feature_cols].astype(float).values
 os.makedirs("explanations", exist_ok=True)
 
 exp = explainer.explain_instance(
     instance,
     weighted_score_prediction,
-    num_features=5
+    num_features=7,
 )
-exp.save_to_file(f"explanations/lime_{faculty_id}.html")
+html = exp.as_html()
+html = html.replace("LIME", f"LIME - Project Evolve {FORMULA_VERSION}", 1)
+with open(f"explanations/lime_{faculty_id}.html", "w", encoding="utf-8") as f:
+    f.write(html)
 print("OK")

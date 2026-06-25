@@ -48,7 +48,7 @@ export default function AuditPage() {
                 Blockchain Audit Trail
               </h1>
               <p className="text-lg text-gray-600 dark:text-gray-400 mt-2 font-medium">
-                Complete immutable record of all evaluation transactions on the distributed ledger
+                Complete tamper-evident record of canonical seven-factor evaluation hashes
               </p>
             </div>
           </div>
@@ -61,7 +61,7 @@ export default function AuditPage() {
                 <div className="absolute inset-0 w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping opacity-75" />
               </div>
               <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400">
-                Network Active • Ganache Local
+                Canonical Seven-Factor Audit • Ganache/Database
               </span>
             </div>
           </div>
@@ -113,6 +113,9 @@ export default function AuditPage() {
                         </div>
                       </th>
                       <th className="px-8 py-5 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        Formula
+                      </th>
+                      <th className="px-8 py-5 text-left text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4" strokeWidth={2} />
                           Timestamp
@@ -141,8 +144,13 @@ export default function AuditPage() {
                         </td>
                         <td className="px-8 py-5">
                           <code className="block font-mono text-xs bg-gray-900 dark:bg-gray-950 text-emerald-400 px-4 py-2.5 rounded-xl border border-gray-800 dark:border-gray-700 max-w-md truncate hover:max-w-none transition-all duration-300 cursor-pointer select-all">
-                            {tx.blockchain_tx_hash}
+                            {tx.blockchain_tx_hash || 'Database-only canonical hash'}
                           </code>
+                        </td>
+                        <td className="px-8 py-5">
+                          <span className="inline-flex px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-200/50 dark:border-emerald-800/30">
+                            {tx.formula_version || 'seven_factor_v1.0_2026_06'}
+                          </span>
                         </td>
                         <td className="px-8 py-5">
                           <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 font-medium">
@@ -155,7 +163,7 @@ export default function AuditPage() {
                     
                     {transactions.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-8 py-16">
+                        <td colSpan={5} className="px-8 py-16">
                           <div className="flex flex-col items-center gap-4">
                             <div className="w-20 h-20 rounded-2xl bg-gray-100 dark:bg-white/5 flex items-center justify-center">
                               <AlertCircle className="w-10 h-10 text-gray-300 dark:text-gray-600" strokeWidth={1.5} />

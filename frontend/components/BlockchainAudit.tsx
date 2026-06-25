@@ -3,6 +3,15 @@ import { ShieldCheck, Clock, Hash, Lock, CheckCircle2 } from 'lucide-react';
 export default function BlockchainAudit({ audit }: { audit: any }) {
   if (!audit) return null;
 
+  const isLegacy = audit.formula_version === 'legacy_pre_seven_factor' || audit.audit_source === 'evaluation_results_with_blockchain';
+  const isDatabaseOnly = !audit.blockchain_tx_hash || String(audit.blockchain_tx_hash).toLowerCase().includes('database-only') || String(audit.blockchain_tx_hash).toLowerCase().includes('not available');
+  const verificationLabel = isLegacy ? 'Legacy Audit - Refresh Recommended' : isDatabaseOnly ? 'Canonical Hash - Database Logged' : 'Verified on Private Blockchain';
+  const verificationText = isLegacy
+    ? 'This record comes from an earlier scoring version. Run the canonical audit regeneration script before final defense/deployment.'
+    : isDatabaseOnly
+      ? 'This record has a seven-factor cryptographic hash stored in the database. Connect Ganache or a permissioned ledger for a real transaction hash.'
+      : 'This record has a seven-factor cryptographic hash and a private-chain transaction identifier.';
+
   return (
     <div className="mt-12 border-t border-gray-200 dark:border-white/10 pt-12">
       {/* Section Header */}
@@ -18,7 +27,7 @@ export default function BlockchainAudit({ audit }: { audit: any }) {
             Blockchain Audit Trail
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
-            Immutable verification on distributed ledger
+            Tamper-evident verification of the canonical seven-factor record
           </p>
         </div>
       </div>
@@ -108,10 +117,10 @@ export default function BlockchainAudit({ audit }: { audit: any }) {
             <div className="bg-gradient-to-br from-emerald-500/10 to-green-500/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-emerald-300/50 dark:border-emerald-600/30 text-center group-hover:shadow-lg group-hover:shadow-emerald-500/10 transition-all duration-300">
               <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-full font-bold text-sm shadow-lg shadow-emerald-500/25">
                 <CheckCircle2 className="w-4 h-4" />
-                Tamper-proof & Immutable
+                {isLegacy ? 'Refresh Audit' : 'Tamper-Evident'}
               </div>
               <p className="text-xs text-emerald-700/70 dark:text-emerald-400/70 font-semibold mt-3 uppercase tracking-wider">
-                Verified on Private Blockchain
+                {verificationLabel}
               </p>
             </div>
           </div>
@@ -122,8 +131,7 @@ export default function BlockchainAudit({ audit }: { audit: any }) {
       <div className="mt-6 flex items-start gap-3 px-2">
         <ShieldCheck className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" strokeWidth={2} />
         <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed font-medium">
-          This evaluation record is permanently stored on a private Ethereum blockchain (Ganache network). 
-          The transaction hash serves as cryptographic proof of authenticity and cannot be altered or deleted.
+          {verificationText} Formula version: {audit.formula_version || 'seven_factor_v1.0_2026_06'}.
         </p>
       </div>
     </div>
